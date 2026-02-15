@@ -46,7 +46,7 @@ Matplotlib
 ### Kurulum
 
 ```bash
-git clone https://github.com/[username]/wing_structural_analysis.git
+git clone https://github.com/capariroket/wing_structural_analysis.git
 cd wing_structural_analysis
 pip install numpy matplotlib
 ```
@@ -678,3 +678,4 @@ MIT License
 ## ✍️ İmza
 
 Ayberk Cem Aksoy
+Berke Tezgöçen
