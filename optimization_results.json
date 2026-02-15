@@ -1,0 +1,98 @@
+{
+  "optimal_config": {
+    "N_Rib": 12,
+    "t_rib_mm": 1.0,
+    "rib_spacing_mm": 216.45833333333334,
+    "X_FS_percent": 15.0,
+    "X_RS_percent": 60.0,
+    "d_FS_outer_mm": 24.0,
+    "t_FS_mm": 1.0,
+    "d_RS_outer_mm": 16.0,
+    "t_RS_mm": 1.0,
+    "Lambda_FS_deg": 3.157944796439268,
+    "Lambda_RS_deg": -10.929488002180381,
+    "eta_FS_percent": 77.77777777777779,
+    "eta_RS_percent": 22.22222222222222,
+    "X_FS_mm": 126.24871394908895,
+    "X_RS_mm": 504.9948557963558,
+    "L_FS_mm": 2957.031624541316,
+    "L_RS_mm": 3007.086022977033,
+    "A_Act_FS_mm2": 72.2566310325653,
+    "A_Act_RS_mm2": 47.12388980384687,
+    "A_Cri_FS_mm2": 15.932586561657443,
+    "A_Cri_RS_mm2": 6.828251383567475,
+    "I_FS_mm4": 4787.001805907451,
+    "I_RS_mm4": 1331.249886958675,
+    "L_Skin_LE_FS_mm": 306.8902893467537,
+    "L_Skin_LE_RS_mm": 1031.3365500641105,
+    "L_Skin_FS_RS_mm": 724.4462607173567,
+    "S_Rib_LE_FS_mm2": 12042.60187353694,
+    "S_Rib_FS_RS_mm2": 36127.805620610816,
+    "S_Rib_mm2": 48170.40749414776
+  },
+  "mass_breakdown": {
+    "m_skin": 5.94375,
+    "m_FS": 0.3007552649743966,
+    "m_RS": 0.1994649280398932,
+    "m_ribs": 1.1670545269057355,
+    "m_total": 7.6110247199200245
+  },
+  "stress_results": {
+    "tau_skin_max_MPa": 0.4066664261130421,
+    "tau_skin_allow_MPa": 30.0,
+    "tau_skin_margin_percent": 98.64444524628986,
+    "sigma_b_FS_max_MPa": 66.66248138416736,
+    "tau_FS_max_MPa": 51.56150592884316,
+    "sigma_vm_FS_max_MPa": 111.44349736635533,
+    "sigma_FS_allow_MPa": 1500.0,
+    "sigma_FS_margin_percent": 92.57043350890964,
+    "sigma_b_RS_max_MPa": 44.441654256111576,
+    "tau_RS_max_MPa": 35.31590151833676,
+    "sigma_vm_RS_max_MPa": 75.60885750478143,
+    "sigma_RS_allow_MPa": 1500.0,
+    "sigma_RS_margin_percent": 94.95940949968123,
+    "y_crit_mm": 0.0,
+    "critical_component": "Front Spar",
+    "theta_tip_deg": 0.3139278256144872,
+    "theta_max_deg": 2.0,
+    "M_root_Nm": 704.0477102138076,
+    "d_FS_mm": 24.0,
+    "t_FS_mm": 1.0,
+    "d_RS_mm": 16.0,
+    "t_RS_mm": 1.0,
+    "eta_FS": 0.7777777777777778,
+    "eta_RS": 0.2222222222222222
+  },
+  "root_reactions": {
+    "Fx_N": 0.0,
+    "Fy_N": 0.0,
+    "Fz_N": 644.1617105604389,
+    "Mx_Nm": 704.0477102138076,
+    "My_Nm": -52.89107614214571,
+    "Mz_Nm": 0.0
+  },
+  "materials": {
+    "Spar": "Carbon Fiber UD (longitudinal)",
+    "Skin": "PLA (3D Print)",
+    "Rib": "PLA (3D Print)"
+  },
+  "box_beam": {
+    "I_box_root_mm4": 126736.54426209621,
+    "I_FS_mm4": 4787.001805907451,
+    "I_RS_mm4": 1331.249886958675,
+    "skin_fraction": 0.9517246447858532
+  },
+  "buckling": {
+    "tau_cr_min_MPa": 0.4895758211424681,
+    "sigma_cr_min_MPa": 0.39166065691397445,
+    "sigma_skin_comp_max_MPa": 8.32313876619306,
+    "R_combined_max": 0.9985252593054007,
+    "N_Rib_final": 19,
+    "rib_feasible": true
+  },
+  "optimization_history": {
+    "total": 5,
+    "accepted": 5,
+    "rejection_reasons": {}
+  }
+}

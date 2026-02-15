@@ -1,0 +1,132 @@
+FLIGHT SCIENCE INPUT PARAMETERS
+	FS: Front spar
+	RS: Rear spar
+	C_m: Pitching moment coefficient Cm [-]
+	AR: Aspect ratio AR [-]
+	λ: Taper ratio [-]
+	V_c: Flight velocity of UAV [m/s]
+	n: load factor accoring to g [-]
+	S_ref: Wing planform area [m2]
+	W_0: Estimated MTOW of UAV [N]
+	ρ: Air density rho_air [kg/m3]
+	x_ac: Aerodynamic center position [%]
+	Λ_ac: Sweep angle from aerodynamic center [deg]
+
+FLIGHT SCIENCE CALCULATED PARAMETERS
+	Y ̅: y distance between mean geometric chord and root side y_MGCROOT [mm]
+	h_FS: Heigth of front spar web [mm]
+	h_RS: Heigth of rear spar web [mm]
+	c_MGC: Mean geometric chord [m]
+	C_r: Root chord lenght [mm]
+
+FLIGHT SCIENCE CALCULATED PARAMETERS FORMULAS
+	Y ̅=√(AR×S_ref )/6 ((1+2λ)/(1+λ))×10^3
+	c_MGC=4/3 √(s/AR) ((1+λ+λ^2)/(1+2λ+λ^2 ))
+	h_FS: Should be obtained from airfoil coordinates data using by upper and lower curve of airfoil.
+	h_RS: Should be obtained from airfoil coordinates data using by upper and lower curve of airfoil.
+
+STRUCTURAL ANALYSIS MATERIAL PROPERTIES
+	σ_max⁡〖for composite〗 : Critical max normal stress of spars at root [MPa]
+	τ_max⁡〖for composite〗 : Composite max shear stress at root tau_shear [Mpa]
+	σ_max⁡〖for PLA〗 : Tension stress of PLA [Mpa]
+	τ_max⁡〖for PLA〗 : Shear stress of PLA [Mpa]
+	ρ_Skin: Skin density [kg/m3]
+	ρ_(Internal structure): Internal structure density [kg/m3]
+
+STRUCTURAL ANALYSIS DESIGN INPUTS
+	t_skin: Thickness of skin [mm]
+	t_rib: Thickness of rib [mm]
+	X_(FS %): Front spar position from leading edge at root chord [%]
+	X_(RS %): Rear spar position from leading edge at root chord [%]
+	d_(FS Outer): Front spar outer diameter [mm]
+	d_(RS Outer): Rear spar outer diameter [mm]
+	t_FS: Front spar thickness [mm]
+	t_RS: Rear spar thickness [mm]
+
+STRUCTURAL ANALYSIS DESIGN OUTPUTS
+	N_Rib: Rib number [-]
+	Λ_FS: Front spar swept angle [deg]
+	Λ_RS: Rear spar swept angle [deg]
+	η_FS: Front spar load dist [%]
+	η_RS: Rear spar load dist [%]
+	X_(FS ): Front spar position from leading edge at root chord [mm]
+	X_(RS ): Rear spar position from leading edge at root chord [mm]
+	L_FS: Front spar lenght [mm]
+	L_RS: Rear spar lenght [mm]
+	A_(Act-FS): Actual area of front spar [mm2]
+	A_(Act-RS): Actual area of rear spar [mm2]
+	A_(Cri-FS): Critical area of front spar [mm2]
+	A_(Cri-RS): Critical area of rear spar [mm2]
+	L_(Skin root LE-FS): Arc lenght of root section between leading edge and front spar [mm]
+	L_(Skin root LE-RS): Arc lenght of root section between leading edge and rear spar [mm]
+	L_(Skin root FS-RS): Arc lenght of root section between leading edge and front spar [mm]
+	S_(Rib LE-FS): Area of root rib between leading edge and front spar [mm2]
+	S_(Rib FS-RS): Area of root rib between rear spar and front spar [mm2]
+	S_Rib: Area of root rib [mm2]
+
+
+
+
+
+
+
+
+
+STRUCTURAL ANALYSIS DESIGN OUTPUTS FORMULAS
+	N_Rib=ROUND UP(1+√((AR × S_ref ) ) \/c_MGC,With 0 Digit)
+	Λ_FS=(arctan⁡(tan⁡(("Λ" _"ac"  )⋅π/180)+((4⋅(x_ac-X_(FS %) ))⋅(1-λ))\/(x_ac⋅AR⋅(1+λ))) )⋅180/π
+	Λ_RS=(arctan⁡(tan⁡(("Λ" _"ac"  )⋅π/180)+((4⋅(x_ac-X_(RS %) ))⋅(1-λ))\/(x_ac⋅AR⋅(1+λ))) )⋅180/π
+	η_FS=(X_(RS %)-x_ac )\/(X_(RS %)-X_(FS %) )
+	η_RS=(x_ac-X_(FS %) )\/(X_(RS %)-X_(FS %) )
+	X_(FS )=C_r⋅X_(FS %)
+	X_(RS )=C_r⋅X_(RS %)
+	L_FS=0.5⋅√((AR⋅S_ref ) )⋅1000\/ cos⁡(("Λ" _"FS"  )⋅π/180)
+	L_RS=0.5⋅√((AR⋅S_ref ) )⋅1000\/ cos⁡(("Λ" _"RS"  )⋅π/180)
+	A_(Act-FS)=π⋅((0.5⋅d_(FS Outer) )^2-(0.5⋅d_(FS Outer)-t_FS )^2 )
+	A_(Act-RS)=π⋅((0.5⋅d_(RS Outer) )^2-(0.5⋅d_(RS Outer)-t_RS )^2 )
+	A_(Cri-FS)=n⋅W_0⋅Y ̅⋅0.5⋅η_FS \/(2⋅σ_max⁡〖for composite〗  )
+	A_(Cri-RS)=n⋅W_0⋅Y ̅⋅0.5⋅η_RS \/(2⋅σ_max⁡〖for composite〗  )
+	L_(Skin root LE-FS)=√(((h_FS \/2)^2+(2⋅X_(FS ) )^2 ) )+((h_FS \/2)^2 \/(4⋅λ⋅X_(FS ) ))⋅ASINH((4⋅X_(FS ) )\/(h_FS ))
+	L_(Skin root LE-RS)=√(((h_RS \/2)^2+(2⋅X_(RS ) )^2 ) )+((h_RS \/2)^2 \/(4⋅λ⋅X_(RS ) ))⋅ASINH((4⋅X_(RS ) )\/(h_RS ))
+	L_(Skin root FS-RS)=L_(Skin root LE-RS) □(-) L_(Skin root LE-FS)
+	S_(Rib LE-FS)=2⋅X_(FS )⋅h_FS \/3
+	S_(Rib FS-RS)=(2⋅(X_(RS ) )⋅h_RS \/3)-S_(Rib LE-FS)
+	S_Rib=S_(Rib LE-FS)+S_(Rib FS-RS)
+
+CALCULATED LOADS & STRESSES
+	M_(Root chord)=n⋅W_0⋅Y ̅\/2
+	T_(Root chord)=1000⋅0.5⋅ρ⋅(V_c^2 )⋅(S_ref \/2)⋅(Y ̅\/1000)⋅C_m
+	τ_FS=T_(Root chord)⋅η_FS⋅d_(FS Outer)⋅0.5\/((π\/32)⋅((d_(FS Outer) )^4-(d_(FS Outer)-2⋅t_FS )^4 ))
+	τ_RS=T_(Root chord)⋅η_RS⋅d_(RS Outer)⋅0.5\/((π\/32)⋅((d_(RS Outer) )^4-(d_(RS Outer)-2⋅t_RS )^4 ))
+	τ_Skin=T_(Root Chord) \/(2⋅S_Rib⋅t_skin )
+	σ_FS=M_Rootchord⋅0.5⋅d_FSOuter⋅η_FS \/((π⋅0.25)⋅((0.5⋅d_FSOuter )^4-(0.5⋅d_FSOuter-t_FS )^4 ))
+	σ_RS=M_Rootchord⋅0.5⋅d_RSOuter⋅η_RS \/((π⋅0.25)⋅((0.5⋅d_RSOuter )^4-(0.5⋅d_RSOuter-t_RS )^4 ))
+	σ_(von-FS)=√((σ_FS^2+3⋅τ_FS^2 ) )
+	σ_(von-RS)=√((σ_RS^2+3⋅τ_RS^2 ) )
+
+ACCEPTANCE CONDITIONS
+	Front spar stress condition: (σ_FS/σ_max⁡〖for composite〗 )+(τ_FS/τ_max⁡〖for composite〗 )^2<1
+	Rear spar stress condition: (σ_RS/σ_max⁡〖for composite〗 )+(τ_RS/τ_max⁡〖for composite〗 )^2<1
+	Front spar section area condition: A_(Act-FS)>A_(Cri-FS)
+	Rear spar section area condition: A_(Act-RS)>A_(Cri-RS)
+	Front spar assembly conditions: d_(FS Outer)+10<h_FS
+	Rear spar assembly conditions: d_(RS Outer)+10<h_RS
+	Skin shear stress condition: τ_Skin<τ_max⁡〖for composite〗 
+
+CALCULATED MASSES
+	m_FS: Front spar mass [kg]
+	m_RS: Rear spar mass [kg]
+	m_Spars: Weight of spars [kg]
+	m_Skin: Weight of skin [kg]
+	m_Ribs: Weight of ribs [kg]
+	m_Total: Total Weight [kg]
+
+CALCULATED MASSES FORMULAS
+	m_FS=A_(Act-FS)⋅L_FS⋅(10^(-8) )⋅ρ_Skin
+	m_RS=AN3⋅L_RS⋅(10^(-8) )⋅ρ_Skin
+	m_Spars=m_FS+m_RS
+	m_Skin=ρ_Skin⋅(2⋅t_skin \/1000)⋅(√((AR⋅S_ref ) ))⋅(L_(Skin oot E-RS)⋅(1+λ)\/1000)\/8
+	m_Ribs=N_Rib⋅S_Rib⋅(10^(-8) )⋅ρ_(Internal tructure)⋅(1+λ^2 )⋅2⋅t_rib⋅0.25
+	m_Total=m_Spars+m_Skin+m_Ribs
+
+

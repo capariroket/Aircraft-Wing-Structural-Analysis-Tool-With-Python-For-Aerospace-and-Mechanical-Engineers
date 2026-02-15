@@ -1,0 +1,563 @@
+SENİN ROLÜN:
+Uçak yapıları ve wing-box (kapalı kesit) torsiyon/shear flow konusunda uzman bir mühendissin. Python ile çalışan bir “Half-Wing Rib–Spar–Skin Preliminary Structural Sizing + Torsion/Stress-Flow” el hesaplayıcısı tasarlayacak ve uygulayacaksın. Çıktıların FEM ekibine doğrudan girdi olacak seviyede net olmalı.
+
+AMAÇ:
+Kullanıcının girdiği aerodinamik/planform ve malzeme verileri ile, kullanıcı tarafından verilen aralık+adım tanımlarına göre tüm kombinasyonları tarayıp (grid-search), kabul koşullarını sağlayan EN HAFİF yarı-kanat konfigürasyonunu bul. Ek olarak, planform boyunca her rib istasyonunda torsion + stress flow (shear flow) hesapla, kritik istasyonu belirle ve grafikleri/tabloları üret.
+
+TEMEL KABULLER (KATI):
+1) Uçakta tek kanat var. Hesap sadece yarı kanat içindir: L_span = b/2.
+2) Statik yapısal sizing yapılacak; aero etkiler yük/moment üretimi için dahil edilecek.
+3) Lift coefficient (C_L) kullanılmayacak. Toplam lift, load factor üzerinden:
+   L_total = n * W0
+   L_half  = L_total / 2
+4) Planform boyunca değerlendirme zorunlu: Her rib istasyonunda (y_i) torsion ve shear flow hesaplanacak.
+5) Wing-box kapalı kesit torsiyonunda Bredt–Batho shear flow yaklaşımı kullanılacak:
+   - Tek hücre için: T = 2*A_m*q  =>  q = T/(2*A_m)
+   - Çok hücre için: T = Σ (2*A_R*q_R) ve uyumluluk (tüm hücrelerde aynı twist rate) ile q_R çözülecek.
+6) Allowable stressler kullanıcıdan direkt alınmayacak. Kullanıcı SF (emniyet katsayısı) girecek:
+   sigma_allow = sigma_u / SF
+   tau_allow   = tau_u / SF
+7) Birim yönetimi: İç hesap SI (m, N, Pa). Kullanıcı arayüzü mm ve MPa olabilir; dönüşümler zorunlu.
+8) Spar boyu: L_FS = L_RS = b/2 (effective length yok).
+9) Optimizasyon: Zorunlu grid search. Opsiyonel Powell (türevsiz refinement) eklenebilir ama ana çözüm grid search olmalı.
+
+------------------------------------------------------------
+A) ZORUNLU INPUTLAR (KULLANICI GİRİŞİ)
+A1) Uçuş bilimi/aero parametreler:
+- C_m: Pitching moment coefficient [-]
+- AR: Aspect ratio [-]
+- λ: Taper ratio [-]
+- V_c: Flight velocity [m/s]
+- n: load factor [-]
+- S_ref: Wing planform area [m^2]
+- W_0: Estimated MTOW [N]
+- ρ: Air density [kg/m^3]
+- x_ac: Aerodynamic center position [% chord]
+- Λ_ac: Sweep angle from aerodynamic center [deg]
+
+A2) Geometri ve kesit parametreleri:
+- b: Span [m]
+- t/c: thickness-to-chord ratio [-]
+- Ȳ: y distance between mean geometric chord and root side [mm]
+- h_FS: height of front spar web [mm]
+- h_RS: height of rear spar web [mm]
+- c_MGC: mean geometric chord [m]
+- C_r: root chord length [mm]
+
+A3) Mevcut listeden “malzeme limitleri” alanları (input olarak kalsın; fakat material table seçilmişse override edilebilsin):
+- σ_max for composite [MPa]
+- τ_max for composite [MPa]
+- σ_max for PLA [MPa]
+- τ_max for PLA [MPa]
+- ρ_Skin [kg/m^3]
+- ρ_(Internal structure) [kg/m^3]
+
+A4) Skin:
+- t_skin [mm]
+
+A5) Emniyet katsayısı:
+- SF [-]
+
+A6) Malzeme tablosu ve seçim:
+- Malzeme tablosu (JSON/dict) her malzeme için:
+  name, E [Pa], nu [-], density [kg/m^3], sigma_u [Pa], tau_u [Pa], G [Pa] (opsiyonel; yoksa E/(2(1+nu)))
+- Kullanıcı seçim yapar:
+  material_spar
+  material_skin
+  material_rib
+
+A7) İteratif tasarım aralıkları (kullanıcı tek değer değil min-max-step verir):
+Rib:
+- t_rib_min, t_rib_max, t_rib_step [mm]
+- N_Rib_min, N_Rib_max, N_Rib_step [-]
+Spar positions:
+- X_FS%_min, X_FS%_max, X_FS%_step [%]
+- X_RS%_min, X_RS%_max, X_RS%_step [%]
+Spar geometry:
+- d_FS_outer_min, d_FS_outer_max, d_FS_outer_step [mm]
+- d_RS_outer_min, d_RS_outer_max, d_RS_outer_step [mm]
+- t_FS_min, t_FS_max, t_FS_step [mm]
+- t_RS_min, t_RS_max, t_RS_step [mm]
+
+A8) Yük dağılımı seçimi (ek input, zorunlu):
+- load_distribution_type ∈ {uniform, elliptic}
+- pitch_moment_distribution_type ∈ {uniform, chord_weighted}  (Cm dağıtımı için)
+
+------------------------------------------------------------
+B) ZORUNLU OUTPUTLAR (HEPSİ)
+B1) Senin belirttiğin çıktı listesi (isimleri aynen):
+- N_Rib
+- Λ_FS [deg]
+- Λ_RS [deg]
+- η_FS [%]
+- η_RS [%]
+- X_(FS) [mm]
+- X_(RS) [mm]
+- L_FS [mm] = b/2
+- L_RS [mm] = b/2
+- A_(Act-FS) [mm^2]
+- A_(Act-RS) [mm^2]
+- A_(Cri-FS) [mm^2]
+- A_(Cri-RS) [mm^2]
+- L_(Skin root LE-FS) [mm]
+- L_(Skin root LE-RS) [mm]
+- L_(Skin root FS-RS) [mm]
+- S_(Rib LE-FS) [mm^2]
+- S_(Rib FS-RS) [mm^2]
+- S_Rib [mm^2]
+
+B2) Ek zorunlu çıktılar (senin taleplerin):
+- Load distribution grafikleri: w(y), V(y), M(y)
+- Torsion & stress flow grafikleri: T(y), q(y), tau_skin(y), twist rate dθ/dz (opsiyonel)
+- Sparların actual inertia değerleri: I_FS, I_RS (en az root için; istenirse y boyunca sabit tek değer)
+- Root bending moment vektörleri: [Mx, My, Mz] ve shear force vektörleri [Fx, Fy, Fz] (tanımını açıkla)
+- Tüm bileşenler için kütle tablosu (skin, FS, RS, ribs, total half-wing)
+- Shear stress ve von Mises: FS, RS, skin, rib için; kritik istasyondaki değerleri raporla
+- Optimizasyon geçmişi: denenen kombinasyon sayısı, en iyi 10 çözüm listesi, kabul/red sebepleri özeti
+- Sonuç raporu: ekrandaki “Optimization Results” benzeri düzenli metin çıktısı
+
+------------------------------------------------------------
+C) GEOMETRİ VE PLANFORM FORMÜLLERİ
+C1) Half-wing span:
+L_span = b/2
+
+C2) Root & tip chord:
+c_root = C_r
+c_tip  = λ * c_root
+
+C3) Yarı kanat boyunca chord dağılımı (lineer taper):
+c(y) = c_root - (c_root - c_tip) * (y / L_span)
+
+C4) Rib istasyonları (N_Rib belirlenince):
+y_i = i * (L_span / N_Rib), i = 0..N_Rib
+Toplam istasyon sayısı N_Rib+1 (root dahil).
+
+C5) Spar konumları (yüzde chord -> mm):
+x_FS(y_i) = (X_FS%/100) * c(y_i)
+x_RS(y_i) = (X_RS%/100) * c(y_i)
+
+C6) Wing-box yükseklik yaklaşımı:
+h_box(y_i) = (t/c) * c(y_i)
+
+C7) Wing-box median area (tek hücre için prelim yaklaşım):
+A_m(y_i) = (x_RS(y_i) - x_FS(y_i)) * h_box(y_i)
+
+C8) Skin root arc length yaklaşımı (preliminary; airfoil datan yoksa):
+- LE–FS: L_LE_FS ≈ x_FS(root)
+- LE–RS: L_LE_RS ≈ x_RS(root)
+- FS–RS: L_FS_RS ≈ x_RS(root) - x_FS(root)
+Eğer airfoil koordinatı verilirse, chord üzerinde eğri integrali ile arc length opsiyonel.
+
+------------------------------------------------------------
+D) YÜK VE MOMENT MODELİ (C_L YOK)
+D1) Toplam half-wing taşıması gereken yük:
+L_half = (n * W0)/2
+
+D2) Dağıtılmış yük w(y) [N/m]:
+- Uniform:
+  w(y) = L_half / L_span
+- Elliptic:
+  w(y) = w0 * sqrt(1 - (y/L_span)^2)
+  w0, ∫_0^{L_span} w(y) dy = L_half koşulundan bulunur:
+  ∫_0^{L_span} sqrt(1-(y/L_span)^2) dy = (π/4) L_span
+  => w0 = L_half / ((π/4) L_span) = 4 L_half / (π L_span)
+
+D3) Shear force ve bending moment (cantilever; serbest uç y=L_span):
+V(y) = ∫_y^{L_span} w(ξ) dξ
+M(y) = ∫_y^{L_span} V(ξ) dξ
+Root: V_root = V(0), M_root = M(0)
+
+D4) Pitching moment (Cm ile, C_L olmadan):
+q∞ = 0.5 * ρ * V_c^2
+M_pitch_total = C_m * q∞ * S_ref * c_MGC     [N·m]
+M_pitch_half  = M_pitch_total / 2
+
+Span boyunca pitching moment dağıt:
+- Uniform: m_pitch(y) = M_pitch_half / L_span  [N·m per m]
+- Chord-weighted: m_pitch(y) ∝ c(y)
+  normalize: m_pitch(y) = k * c(y)
+  k, ∫_0^{L_span} m_pitch(y) dy = M_pitch_half’den bulunur.
+
+D5) Aerodinamik merkez konumu:
+x_ac(y) = (x_ac%/100) * c(y)
+
+D6) Shear center (preliminary):
+x_sc(y) ≈ (x_FS(y)+x_RS(y))/2
+Opsiyon: kullanıcı shear center yüzdesi girerse override et.
+
+D7) Eksen kaçıklığı:
+e(y) = x_ac(y) - x_sc(y)
+
+D8) Torsiyon momenti dağılımı:
+Lift kaynaklı torsiyon yoğunluğu: t_L(y) = w(y) * e(y) [N·m per m]
+Pitch moment kaynaklı torsiyon yoğunluğu: t_M(y) = m_pitch(y) [N·m per m] (işaret konvansiyonunu açıkça tanımla)
+Toplam torsiyon yoğunluğu: t(y) = t_L(y) + t_M(y)
+
+Kesitte taşınan torsiyon:
+T(y) = ∫_y^{L_span} t(ξ) dξ    [N·m]
+Root torsiyon: T_root = T(0)
+
+------------------------------------------------------------
+E) WING-BOX TORSION / SHEAR FLOW FORMÜLLERİ (RIB ISTASYONUNDA)
+E1) Tek hücre (preliminary default):
+q(y_i) = T(y_i) / (2 * A_m(y_i))            [N/m]
+tau_skin(y_i) = q(y_i) / t_skin             [Pa]  (t_skin SI’a çevrilecek)
+
+E2) Çok hücreli (opsiyonel ama “daha iyi formül” olarak dahil et):
+Wing section N cell:
+T = Σ_{R=1..N} 2 A_R q_R
+Uyumluluk: tüm hücrelerde twist rate aynı:
+dθ/dz = (1/(2 A_R G)) * ∮ (q_R / t) ds      (duvarlar boyunca)
+Pratik hesap için δ = ∮ ds / t ve ortak duvarlar için (q farkları) kullan.
+Konsekütif bağlı hücrelerde genel yazım:
+dθ/dz = (1/(2 A_R G)) ( -q_{R-1} δ_{R-1,R} + q_R δ_R - q_{R+1} δ_{R+1,R} )
+(δ terimleri ilgili duvarların ∮ds/t toplamlarını temsil eder)
+G duvardan duvara değişirse “modulus-weighted thickness” kullan:
+t* = (G/G_ref) t
+ve δ = ∮ ds / t* kullan.
+Not: Bu multi-cell sistemi lineer denklem takımı olarak kurup q_R ve dθ/dz’yi çöz.
+
+E3) Shear stress duvarlarda:
+tau_wall = q_wall / t_wall
+Ortak duvarlarda q_wall = q_R - q_neighbor gibi işaretli.
+
+------------------------------------------------------------
+F) SPAR BENDING/SHEAR VE INERTIA (DAİRESEL TÜP)
+F1) Spar kesit alanı (tube):
+A = (π/4) (d_o^2 - d_i^2)
+d_i = d_o - 2 t
+
+F2) Second moment of area (bending inertia, tube):
+I = (π/64) (d_o^4 - d_i^4)
+
+F3) Bending normal stress (root veya kritik istasyon):
+sigma_b = M * c_dist / I_equiv
+Burada c_dist: nötr eksenden dış fiber mesafesi. Basit yaklaşım: c_dist ≈ d_o/2.
+Not: İki spar birlikte bending taşıyorsa, yük paylaşımı η ile:
+M_FS = η_FS * M
+M_RS = η_RS * M
+
+F4) Spar shear stress (kaba ama raporlanacak):
+tau_spar ≈ V_share / A_shear
+A_shear için tube’da kaba yaklaşım: A_shear ≈ A
+V_share: η üzerinden paylaştır:
+V_FS = η_FS * V, V_RS = η_RS * V
+
+F5) Von Mises (spar için):
+sigma_vm = sqrt( sigma_b^2 + 3 * tau_spar^2 )
+
+------------------------------------------------------------
+G) LOAD SHARING (η_FS, η_RS) – NET TANIM
+İki sparın bending yük paylaşımı için default:
+η_FS = I_FS / (I_FS + I_RS)
+η_RS = I_RS / (I_FS + I_RS)
+Aynı oran V ve M paylaşımında kullanılabilir (preliminary).
+Not: Bu oranlar span boyunca sabit kabul edilir (spar kesitleri sabitse). İstersen chord ile değişen h_box gibi etkiler için opsiyon ekle.
+
+------------------------------------------------------------
+H) RIB MODELİ (PRELIMINARY, AMA PLANFORM BOYUNCA)
+H1) Rib spacing:
+spacing = L_span / N_Rib
+
+H2) Rib alanları (root için raporlanacak):
+S_Rib_total ≈ chord_thickness_envelope * chord_length_approx
+Basit: S_Rib ≈ h_box(root) * c_root
+Parçalı rapor:
+S_Rib_LE_FS ≈ h_box(root) * x_FS(root)
+S_Rib_FS_RS ≈ h_box(root) * (x_RS(root)-x_FS(root))
+
+H3) Rib mass:
+m_ribs = N_Rib * (S_Rib * t_rib) * rho_rib
+(birim dönüşümler zorunlu)
+
+------------------------------------------------------------
+I) KÜTLE HESAPLARI (HALF-WING)
+I1) Skin alanı (preliminary):
+S_skin_half ≈ 2 * ∫_0^{L_span} c(y) dy
+(t/c ile üst-alt yüzey farkı istenirse katsayı ekle; default 2*c)
+
+m_skin = S_skin_half * t_skin * rho_skin
+
+I2) Spar kütlesi:
+m_FS = A_FS * L_span * rho_spar
+m_RS = A_RS * L_span * rho_spar
+
+I3) Total:
+m_total = m_skin + m_FS + m_RS + m_ribs
+
+------------------------------------------------------------
+J) KABUL KRİTERLERİ (HER KONFİGÜRASYON İÇİN)
+J1) Allowable’lar:
+sigma_allow_spar = sigma_u_spar / SF
+tau_allow_spar   = tau_u_spar / SF
+sigma_allow_skin = sigma_u_skin / SF
+tau_allow_skin   = tau_u_skin / SF
+sigma_allow_rib  = sigma_u_rib / SF
+tau_allow_rib    = tau_u_rib / SF
+
+J2) Geometri doğrulama:
+- X_FS% < X_RS%
+- t_FS < d_FS_outer/2, t_RS < d_RS_outer/2
+- d_o, t > 0
+- N_Rib >= 2
+
+J3) İstasyon bazlı kontrol:
+Her rib istasyonunda y_i:
+- tau_skin(y_i) <= tau_allow_skin
+- q(y_i) hesaplanır
+- spar shear/bending -> sigma_vm_spar(y_i) <= sigma_allow_spar
+Kritik istasyon:
+y_crit = argmax sigma_vm_component(y_i)
+
+J4) Deflection (preliminary; tek parça sabit EI varsayımıyla):
+delta_tip ≈ L_span^3 * w_eq / (3 * E_equiv * I_equiv)
+w_eq uniformsa w_eq = L_half / L_span
+ellipticse eşdeğer katsayıyla yaklaş (opsiyon).
+Kabul: delta_tip <= L_span/20
+
+------------------------------------------------------------
+K) OPTİMİZASYON ALGORİTMASI
+K1) Grid Search (zorunlu):
+For N_Rib in [min..max step]:
+  For t_rib in [min..max step]:
+    For X_FS%:
+      For X_RS%:
+        For d_FS_outer:
+          For t_FS:
+            For d_RS_outer:
+              For t_RS:
+                - Geometri valid mi?
+                - İstasyonları üret y_i
+                - w(y), V(y), M(y), m_pitch(y), T(y) hesapla
+                - A_m(y_i), q(y_i), tau_skin(y_i) hesapla
+                - I_FS, I_RS, η_FS, η_RS hesapla
+                - sigma_vm_spar(y_i), tau_spar(y_i) hesapla
+                - Tüm acceptance checks
+                - Geçerse: kütleleri hesapla, sonucu kaydet
+
+K2) Objective:
+Minimize m_total (half-wing)
+
+K3) Çıktı:
+En iyi (minimum kütle) geçen konfigürasyonu seç ve bütün zorunlu outputları üret.
+
+K4) Opsiyonel Powell:
+Grid’ten en iyi 5 sonucu başlangıç noktası yap.
+Sürekli değişkenlerde (X_FS, X_RS, d, t) Powell ile iyileştir.
+N_Rib ayrık kalır.
+
+------------------------------------------------------------
+L) RAPORLAMA VE GRAFİKLER
+L1) Grafikleri Matplotlib ile üret:
+- w(y) dağılımı
+- V(y)
+- M(y)
+- T(y)
+- q(y) shear flow
+- tau_skin(y)
+- sigma_vm (FS/RS) vs y (opsiyon)
+L2) “Optimization Results” metni:
+- Optimal parameters
+- Rib dimensions (t_rib, spacing, N_Rib)
+- Structural performance (max stresses, safety margin)
+- Materials
+- Iteration history (total iterations, accepted count)
+- Spar position comparison (initial vs optimal)
+L3) Kütle tablosu:
+skin / FS / RS / ribs / total (kg)
+
+------------------------------------------------------------
+M) DELIVERABLES (BUNLARI ÜRET)
+1) Python paket yapısı:
+- materials.py (material table + selection)
+- geometry.py (planform, stations, box area)
+- loads.py (w, V, M, m_pitch, T)
+- torsion.py (single-cell + optional multi-cell solver)
+- spars.py (tube properties, stresses)
+- ribs.py (rib geometry + mass)
+- optimization.py (grid + optional powell)
+- reporting.py (tables, text report, csv/json export)
+- plots.py (all plots)
+2) Bir örnek input seti ve beklenen örnek output (format odaklı)
+3) Her formülün birim kontrolü (assertion) ve dönüşüm fonksiyonları
+
+KALİTE KURALLARI:
+- Kod deterministik olmalı (aynı input -> aynı output).
+- Her kabul/red kararında hangi kuralın fail olduğunu logla.
+- “Aşırı büyük safety margin” gibi durumlarda kullanıcıya birim hatası olabileceğini belirten uyarı ver.
+
+SON:
+Bu prompttaki tüm input ve output isimleri arayüzde birebir görünsün. Hiçbirini silme. Sadece eklenen yeni inputlar (b, t/c, SF, dağılım tipleri, malzeme seçimleri) ve eklenen yeni outputlar (grafikler, inertia, vektörler, kütle tablosu, von mises vs.) zorunlu olarak olsun.
+
+
+SENİN ROLÜN:
+Uçak yapıları ve wing-box (kapalı kesit) torsiyon/shear flow konusunda uzman bir mühendissin. Python ile çalışan bir “Half-Wing Rib–Spar–Skin Preliminary Structural Sizing + Torsion/Stress-Flow” el hesaplayıcısı tasarlayacaksın.
+
+[EKLENDİ – TEK DOSYA ŞARTI]
+Kodu parça parça, modül modül yazmayacaksın. Çıktıyı TEK BİR DOSYA olarak vereceksin:
+- Dosya adı: wing_optimizer.py
+- Tüm fonksiyonlar, sınıflar, data tabloları ve main() bu tek dosyanın içinde olacak.
+- Kullanıcı bu dosyayı çalıştırınca interaktif CLI ile input alacak ve tüm çıktıları üretecek.
+
+AMAÇ:
+Kullanıcının girdiği aerodinamik/planform ve malzeme verileri ile, kullanıcı tarafından verilen aralık+adım tanımlarına göre tüm kombinasyonları tarayıp (grid-search), kabul koşullarını sağlayan EN HAFİF yarı-kanat konfigürasyonunu bul. Ek olarak, planform boyunca her rib istasyonunda torsion + stress flow (shear flow) hesapla, kritik istasyonu belirle ve grafikleri/tabloları üret.
+
+TEMEL KABULLER (KATI):
+1) Uçakta tek kanat var. Hesap sadece yarı kanat içindir: L_span = b/2.
+2) Statik yapısal sizing yapılacak; aero etkiler yük/moment üretimi için dahil edilecek.
+3) Lift coefficient (C_L) kullanılmayacak. Toplam lift, load factor üzerinden:
+   L_total = n * W0
+   L_half  = L_total / 2
+4) Planform boyunca değerlendirme zorunlu: Her rib istasyonunda y_i torsion ve shear flow hesaplanacak.
+5) Wing-box kapalı kesit torsiyonunda Bredt–Batho shear flow yaklaşımı kullanılacak:
+   - Tek hücre için: T = 2*A_m*q  =>  q = T/(2*A_m)
+   - Çok hücre için: T = Σ 2*A_R*q_R ve uyumluluk (tüm hücrelerde aynı twist rate) ile q_R çözülecek.
+6) Allowable stressler kullanıcıdan direkt alınmayacak. Kullanıcı SF (emniyet katsayısı) girecek:
+   sigma_allow = sigma_u / SF
+   tau_allow   = tau_u / SF
+7) Birim yönetimi: İç hesap SI (m, N, Pa). Kullanıcı arayüzü mm ve MPa olabilir; dönüşümler zorunlu.
+8) Spar boyu: L_FS = L_RS = b/2 (effective length yok).
+9) Optimizasyon: Zorunlu grid search. Opsiyonel Powell (türevsiz refinement) eklenebilir ama ana çözüm grid search olmalı.
+
+------------------------------------------------------------
+[EKLENDİ – DEFAULT INPUT + ENTER İLE KABUL + BİRİMLER]
+PROGRAM INTERAKTİF CLI İLE INPUT ALACAK.
+Her input şu formatta sorulacak ve birim yazılacak:
+"PARAM_NAME [UNIT] (default = X): "
+Kullanıcı:
+- Değer girerse o kullanılacak
+- Boş bırakıp ENTER’a basarsa default kabul edilecek
+Yanlış tip girilirse tekrar sorulacak.
+
+Fotoğraftan alınan DEFAULT değerleri şu şekilde set et:
+
+# Flight science defaults
+C_m [–] default -0.003
+AR [–] default 11.0
+Lambda_taper (λ) [–] default 0.45
+V_c [m/s] default 21.0
+n_load_factor [–] default 2.0
+S_ref [m^2] default 3.17
+W_0 [N] default 65.0
+rho_air [kg/m^3] default 1.773
+x_ac [% chord, 0.25=25%] default 0.25
+Lambda_ac [deg] default 0.0
+
+# Material limit defaults (legacy inputs)
+sigma_max_composite [MPa] default 300.0
+tau_max_composite [MPa] default 150.0
+sigma_max_PLA [MPa] default 50.0
+tau_max_PLA [MPa] default 25.0
+rho_Skin [kg/m^3] default 1200.0
+rho_Internalstructure [kg/m^3] default 1200.0
+
+# Structural design defaults (legacy single values; fakat optimizasyonda aralık+adım kullanılacak)
+t_skin [mm] default 0.625
+t_rib [mm] default 2.0
+X_FS_percent [% chord] default 0.15
+X_RS_percent [% chord] default 0.60
+d_FSOuter [mm] default 20.0
+d_RSOuter [mm] default 20.0
+t_FS [mm] default 1.0
+t_RS [mm] default 1.0
+
+# Airfoil/section defaults
+h_FS [mm] default 5195.0
+h_RS [mm] default 5195.0
+
+# Additional mandatory defaults you previously required
+b [m] default 3.0            (kullanıcı isterse değiştirsin; yoksa 3.0 al)
+t_over_c [–] default 0.12     (kullanıcı isterse değiştirsin; yoksa 0.12 al)
+SF [–] default 1.5
+
+Ayrıca kullanıcıdan “load_distribution_type” seçimi alınacak:
+1 = uniform (default 1)
+2 = elliptic
+
+Ve “pitch_moment_distribution_type”:
+1 = uniform (default 1)
+2 = chord_weighted
+
+------------------------------------------------------------
+[EKLENDİ – MALZEME SEÇİMİ SAYI İLE]
+Kullanıcı malzeme adını yazmayacak; listeden NUMARA ile seçecek.
+Program başında material table yazdır:
+1- Al6061
+2- Al7075
+3- CFRP_UD
+4- Tough_PLA
+(İstersen 5- Plywood ekle)
+
+Her bir malzeme için şu alanlar tabloda olacak:
+- name
+- E [Pa]
+- nu [-]
+- density [kg/m^3]
+- sigma_u [Pa]
+- tau_u [Pa]
+- (opsiyonel) G [Pa]; yoksa G = E/(2*(1+nu))
+
+Kullanıcıdan şu seçimler alınacak (ENTER ile default):
+- Spar material id (default 3)
+- Rib material id (default 4)
+- Skin material id (default 4)
+
+------------------------------------------------------------
+A) ZORUNLU INPUTLAR (KULLANICI GİRİŞİ)
+A1) Uçuş bilimi/aero parametreler:
+- C_m: Pitching moment coefficient [-]
+- AR: Aspect ratio [-]
+- λ: Taper ratio [-]
+- V_c: Flight velocity [m/s]
+- n: load factor [-]
+- S_ref: Wing planform area [m^2]
+- W_0: Estimated MTOW [N]
+- ρ: Air density [kg/m^3]
+- x_ac: Aerodynamic center position [% chord]
+- Λ_ac: Sweep angle from aerodynamic center [deg]
+
+A2) Geometri ve kesit parametreleri:
+- b: Span [m]
+- t/c: thickness-to-chord ratio [-]
+- Ȳ: y distance between mean geometric chord and root side [mm]
+- h_FS: height of front spar web [mm]
+- h_RS: height of rear spar web [mm]
+- c_MGC: mean geometric chord [m]
+- C_r: root chord length [mm]
+
+A3) Malzeme limitleri (legacy input; tabloda varsa override edilebilir):
+- σ_max_composite [MPa]
+- τ_max_composite [MPa]
+- σ_max_PLA [MPa]
+- τ_max_PLA [MPa]
+- ρ_Skin [kg/m^3]
+- ρ_(Internal structure) [kg/m^3]
+
+A4) Skin:
+- t_skin [mm]
+
+A5) Emniyet katsayısı:
+- SF [-]
+
+A6) İteratif tasarım aralıkları (kullanıcı tek değer değil min-max-step verir):
+Rib:
+- t_rib_min, t_rib_max, t_rib_step [mm]
+- N_Rib_min, N_Rib_max, N_Rib_step [-]
+Front spar:
+- X_FS%_min, X_FS%_max, X_FS%_step [%]
+- d_FS_outer_min, d_FS_outer_max, d_FS_outer_step [mm]
+- t_FS_min, t_FS_max, t_FS_step [mm]
+Rear spar:
+- X_RS%_min, X_RS%_max, X_RS%_step [%]
+- d_RS_outer_min, d_RS_outer_max, d_RS_outer_step [mm]
+- t_RS_min, t_RS_max, t_RS_step [mm]
+
+------------------------------------------------------------
+B) ZORUNLU OUTPUTLAR (HEPSİ)
+(… buradan itibaren önceki uzun prompttaki tüm formüller, torsion/shear flow, multi-cell opsiyonu, yük/moment integralleri, spar inertia, von mises, kabul koşulları, kütle tablosu, grafikler ve optimization results raporu AYNEN KORUNACAK. HİÇBİRİNİ ÇIKARMA. …)
+
+ÖZEL ŞART:
+- Final cevapta tek bir .py dosyasının TAM KODUNU üret.
+- Kod içinde açıklayıcı yorumlar olsun.
+- Kullanıcı çalıştırınca: inputları sor, default mekanizması çalışsın, optimize et, sonuçları yazdır, grafikleri kaydet/ göster.
+
