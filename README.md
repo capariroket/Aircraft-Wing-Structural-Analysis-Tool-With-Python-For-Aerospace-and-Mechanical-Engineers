@@ -17,7 +17,7 @@ Yazar: Berke Tezgöçen & Ayberk Cem Aksoy
 
 
 DESCRIPTION = """
-Half-Wing Structural Sizing Program — Description (max 350 words)
+Half-Wing Structural Sizing Program 
 =================================================================
 
 This program performs preliminary structural sizing of a half-wing for
