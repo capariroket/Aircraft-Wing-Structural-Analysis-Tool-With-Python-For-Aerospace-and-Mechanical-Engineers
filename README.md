@@ -11,7 +11,7 @@ Bu dosya programin calisma mantigini, modullerini, formullerini ve
 algoritmasini detayli olarak aciklar. Kod icermez, sadece dokumantasyondur.
 Calistirdiginizda bu dokumantasyonu terminale basar.
 
-Yazar: Otomatik olusturulmustur
+Yazar: Berke Tezgöçen & Ayberk Cem Aksoy
 ================================================================================
 """
 
