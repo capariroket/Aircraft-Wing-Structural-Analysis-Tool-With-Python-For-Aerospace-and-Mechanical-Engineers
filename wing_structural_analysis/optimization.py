@@ -818,6 +818,24 @@ class GridSearchOptimizer:
             print("Try expanding design space or relaxing constraints.")
             return None
 
+        # Show Phase-1 best solution mass breakdown
+        p1_best = min(self.accepted_results, key=lambda r: r.mass_total)
+        print(f"\n  Phase-1 Best Solution (mass = {p1_best.mass_total*1000:.2f} g):")
+        print(f"    {'Component':<12} {'Mass [g]':>10}")
+        print(f"    {'-'*12} {'-'*10}")
+        print(f"    {'Skin':<12} {p1_best.mass_skin*1000:>10.2f}")
+        print(f"    {'Front Spar':<12} {p1_best.mass_FS*1000:>10.2f}")
+        print(f"    {'Rear Spar':<12} {p1_best.mass_RS*1000:>10.2f}")
+        print(f"    {'Ribs':<12} {p1_best.mass_ribs*1000:>10.2f}")
+        print(f"    {'-'*12} {'-'*10}")
+        print(f"    {'TOTAL':<12} {p1_best.mass_total*1000:>10.2f}")
+        print(f"    Config: d_FS={p1_best.config.d_FS_outer_mm:.0f}mm, "
+              f"d_RS={p1_best.config.d_RS_outer_mm:.0f}mm, "
+              f"t_FS={p1_best.config.t_FS_mm:.1f}mm, "
+              f"t_RS={p1_best.config.t_RS_mm:.1f}mm, "
+              f"X_FS={p1_best.config.X_FS_percent:.0f}%, "
+              f"X_RS={p1_best.config.X_RS_percent:.0f}%")
+
         # =====================================================================
         # PHASE-2: Buckling fix for Top-N
         # =====================================================================

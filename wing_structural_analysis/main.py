@@ -31,7 +31,9 @@ from optimization import (DesignRange, DesignSpace, run_optimization,
 from ga_optimization import run_ga_optimization, GAConfig
 from reporting import (OptimalConfig, MassBreakdown, StressResults,
                        RootReactionsReport, OptimizationHistory,
-                       generate_full_report, check_for_warnings, export_to_json)
+                       generate_full_report, generate_mass_table,
+                       generate_optimization_history_section,
+                       check_for_warnings, export_to_json)
 from plots import PlotConfig, generate_all_plots
 
 
@@ -561,8 +563,8 @@ def main():
         eta_RS_percent=best.eta_RS * 100,
         X_FS_mm=spar_pos.x_FS_at_station(planform.C_r) * 1000,
         X_RS_mm=spar_pos.x_RS_at_station(planform.C_r) * 1000,
-        L_FS_mm=0.5 * np.sqrt(AR * S_ref) * 1000 / np.cos(np.radians(Lambda_FS)),
-        L_RS_mm=0.5 * np.sqrt(AR * S_ref) * 1000 / np.cos(np.radians(Lambda_RS)),
+        L_FS_mm=planform.L_span * 1000 / np.cos(np.radians(Lambda_FS)),
+        L_RS_mm=planform.L_span * 1000 / np.cos(np.radians(Lambda_RS)),
         A_Act_FS_mm2=spar_FS.area * 1e6,
         A_Act_RS_mm2=spar_RS.area * 1e6,
         A_Cri_FS_mm2=A_cri_FS * 1e6,
@@ -747,10 +749,54 @@ def main():
     )
 
     # ==========================================================================
-    # PRINT REPORT
+    # PHASE-2 POST-PROCESSING: Rib web buckling fix & mass update
+    # (Compute first, print later — so MASS BREAKDOWN shows final values)
+    # ==========================================================================
+
+    # --- Rib web buckling check & auto-thickening ---
+    rwb = fix_rib_web_buckling(
+        final_y_ribs,
+        V_at_y=V_interp,
+        h_box_at_y=h_interp,
+        E_rib=materials.rib.E,
+        nu_rib=materials.rib.nu,
+        t_rib_initial=cfg.t_rib_mm / 1000,
+        t_rib_step=0.0005,
+        t_rib_max=0.010,
+    )
+
+    # Compute rib geometries at final stations for mass display
+    from geometry import chord_at_station as chord_at_station_val
+    rwb_chord = np.array([
+        chord_at_station_val(yi, planform.C_r, planform.c_tip, planform.L_span)
+        for yi in final_y_ribs
+    ])
+    rwb_h_box = planform.t_c * rwb_chord
+    rwb_x_FS_arr = np.array([spar_pos.x_FS_at_station(c) for c in rwb_chord])
+    rwb_x_RS_arr = np.array([spar_pos.x_RS_at_station(c) for c in rwb_chord])
+    rwb_rib_geoms = generate_rib_geometries(
+        final_y_ribs, rwb_chord, rwb_h_box, rwb_x_FS_arr, rwb_x_RS_arr,
+        parabolic=use_parabolic)
+
+    # Update mass if ribs were thickened
+    old_rib_mass = best.mass_ribs
+    if rwb.n_thickened > 0:
+        total_rib_mass_new = 0.0
+        for ri in range(1, len(rwb_rib_geoms)):
+            t_ri = rwb.t_rib_per_station[ri]
+            total_rib_mass_new += rwb_rib_geoms[ri].S_total * t_ri * materials.rib.density
+
+        best.mass_ribs = total_rib_mass_new
+        best.mass_total = best.mass_skin + best.mass_FS + best.mass_RS + best.mass_ribs
+        mass_breakdown.m_ribs = best.mass_ribs
+        mass_breakdown.m_total = best.mass_total
+
+    # ==========================================================================
+    # PRINT REPORT (config, stress, reactions, materials — no mass/history yet)
     # ==========================================================================
     report = generate_full_report(optimal_config, mass_breakdown, stress_results,
-                                  root_reactions, mat_names, opt_history)
+                                  root_reactions, mat_names, opt_history,
+                                  include_mass=False, include_history=False)
     print(report)
 
     # Warnings
@@ -761,7 +807,11 @@ def main():
             print(w)
         print("!" * 70)
 
-    # Box beam and buckling summary
+    # ==========================================================================
+    # PHASE-2 DETAIL TABLES
+    # ==========================================================================
+
+    # --- Box Beam & Buckling Summary ---
     print("\n" + "=" * 50)
     print("BOX BEAM & BUCKLING ANALYSIS")
     print("=" * 50)
@@ -784,81 +834,43 @@ def main():
     # Print adaptive rib status
     print(f"\n  {adapt_msg}")
 
-    # Print bay results table
+    # --- Bay-by-Bay Buckling Results ---
     if bay_results:
         print("\n" + "=" * 50)
         print("BAY-BY-BAY BUCKLING RESULTS")
         print("=" * 50)
         print(format_bay_results_table(bay_results))
 
-    # ==========================================================================
-    # RIB WEB BUCKLING CHECK & AUTO-THICKENING
-    # ==========================================================================
+    # --- Rib Web Buckling Table ---
     print("\n" + "=" * 50)
     print("RIB WEB BUCKLING CHECK")
     print("=" * 50)
 
-    # Use Phase-2 results if available, otherwise compute fresh
-    if (best.t_rib_per_station is not None and
-            len(best.t_rib_per_station) == len(final_y_ribs)):
-        # Already computed in Phase-2 — just display
-        from ribs import RibWebBucklingResult
-        rwb = fix_rib_web_buckling(
-            final_y_ribs,
-            V_at_y=V_interp,
-            h_box_at_y=h_interp,
-            E_rib=materials.rib.E,
-            nu_rib=materials.rib.nu,
-            t_rib_initial=cfg.t_rib_mm / 1000,
-            t_rib_step=0.0005,
-            t_rib_max=0.010,
-        )
-    else:
-        rwb = fix_rib_web_buckling(
-            final_y_ribs,
-            V_at_y=V_interp,
-            h_box_at_y=h_interp,
-            E_rib=materials.rib.E,
-            nu_rib=materials.rib.nu,
-            t_rib_initial=cfg.t_rib_mm / 1000,
-            t_rib_step=0.0005,
-            t_rib_max=0.010,
-        )
-
-    print(format_rib_web_buckling_table(rwb))
+    print(format_rib_web_buckling_table(rwb, rib_geometries=rwb_rib_geoms,
+                                         rib_density=materials.rib.density))
 
     if rwb.n_thickened > 0:
         print(f"\n  {rwb.n_thickened} ribs thickened: "
               f"{rwb.t_rib_initial_mm:.1f}mm -> {rwb.t_rib_max_mm:.1f}mm (max)")
-
-        # Recompute rib mass with per-station t_rib
-        from geometry import chord_at_station as chord_at_station_val
-        new_chord = np.array([
-            chord_at_station_val(yi, planform.C_r, planform.c_tip, planform.L_span)
-            for yi in final_y_ribs
-        ])
-        new_h_box = planform.t_c * new_chord
-        new_x_FS_arr = np.array([spar_pos.x_FS_at_station(c) for c in new_chord])
-        new_x_RS_arr = np.array([spar_pos.x_RS_at_station(c) for c in new_chord])
-        new_ribs = generate_rib_geometries(
-            final_y_ribs, new_chord, new_h_box, new_x_FS_arr, new_x_RS_arr,
-            parabolic=use_parabolic)
-
-        total_rib_mass_new = 0.0
-        for ri in range(1, len(new_ribs)):
-            t_ri = rwb.t_rib_per_station[ri]
-            total_rib_mass_new += new_ribs[ri].S_total * t_ri * materials.rib.density
-
-        old_rib_mass = best.mass_ribs
-        best.mass_ribs = total_rib_mass_new
-        best.mass_total = best.mass_skin + best.mass_FS + best.mass_RS + best.mass_ribs
-        mass_breakdown.m_ribs = best.mass_ribs
-        mass_breakdown.m_total = best.mass_total
-
-        print(f"  Rib mass updated: {old_rib_mass*1000:.2f}g -> {total_rib_mass_new*1000:.2f}g")
-        print(f"  Total mass updated: {best.mass_total*1000:.2f}g")
+        print(f"  Rib mass updated: {old_rib_mass*1000:.2f}g -> {best.mass_ribs*1000:.2f}g")
+        print(f"  Total mass (final): {best.mass_total*1000:.2f}g")
     else:
         print(f"\n  All ribs pass web buckling at t_rib = {rwb.t_rib_initial_mm:.1f}mm. No thickening needed.")
+
+    # ==========================================================================
+    # MASS BREAKDOWN (after all Phase-2 adjustments)
+    # ==========================================================================
+    print("\n" + generate_mass_table(mass_breakdown))
+
+    # ==========================================================================
+    # OPTIMIZATION HISTORY
+    # ==========================================================================
+    if opt_history:
+        print("\n" + generate_optimization_history_section(opt_history))
+
+    print("\n" + "=" * 70)
+    print("END OF REPORT")
+    print("=" * 70)
 
     # ==========================================================================
     # GENERATE PLOTS

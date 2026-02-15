@@ -324,23 +324,36 @@ def generate_full_report(config: OptimalConfig,
                          stress: StressResults,
                          reactions: RootReactionsReport,
                          materials: Dict[str, str],
-                         history: Optional[OptimizationHistory] = None) -> str:
-    """Generate complete text report."""
+                         history: Optional[OptimizationHistory] = None,
+                         include_mass: bool = True,
+                         include_history: bool = True) -> str:
+    """Generate complete text report.
+
+    Args:
+        include_mass: If False, MASS BREAKDOWN section is omitted (caller prints it separately).
+        include_history: If False, OPTIMIZATION HISTORY section is omitted (caller prints it separately).
+    """
     sections = [
         generate_header(),
         generate_optimal_params_section(config),
-        generate_mass_table(mass),
+    ]
+
+    if include_mass:
+        sections.append(generate_mass_table(mass))
+
+    sections.extend([
         generate_stress_section(stress),
         generate_root_reactions_section(reactions),
         generate_materials_section(materials),
-    ]
+    ])
 
-    if history:
+    if include_history and history:
         sections.append(generate_optimization_history_section(history))
 
-    sections.append("\n" + "=" * 70)
-    sections.append("END OF REPORT")
-    sections.append("=" * 70)
+    if include_mass and include_history:
+        sections.append("\n" + "=" * 70)
+        sections.append("END OF REPORT")
+        sections.append("=" * 70)
 
     return "\n".join(sections)
 

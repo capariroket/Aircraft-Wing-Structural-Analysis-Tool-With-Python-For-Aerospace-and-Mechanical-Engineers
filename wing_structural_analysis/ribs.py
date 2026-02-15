@@ -1013,27 +1013,41 @@ def fix_rib_web_buckling(y_ribs: np.ndarray,
     )
 
 
-def format_rib_web_buckling_table(rwb: RibWebBucklingResult) -> str:
+def format_rib_web_buckling_table(rwb: RibWebBucklingResult,
+                                   rib_geometries: Optional[List] = None,
+                                   rib_density: float = 0.0) -> str:
     """Format rib web buckling results as a human-readable table.
 
     Args:
         rwb: RibWebBucklingResult from fix_rib_web_buckling().
+        rib_geometries: Optional list of RibGeometry objects for mass calculation.
+        rib_density: Rib material density [kg/m3] for mass calculation.
 
     Returns:
         Formatted table string.
     """
+    show_mass = rib_geometries is not None and rib_density > 0
     lines = []
-    sep = "-" * 100
 
-    lines.append(sep)
-    lines.append(
-        f"{'Rib':>4} {'y[mm]':>8} {'h_box[mm]':>10} {'t_rib[mm]':>10} "
-        f"{'tau_rib[MPa]':>13} {'tau_cr[MPa]':>12} {'MoS':>8} {'Status':>8}"
-    )
+    if show_mass:
+        sep = "-" * 116
+        lines.append(sep)
+        lines.append(
+            f"{'Rib':>4} {'y[mm]':>8} {'h_box[mm]':>10} {'t_rib[mm]':>10} "
+            f"{'tau_rib[MPa]':>13} {'tau_cr[MPa]':>12} {'MoS':>8} {'Mass[g]':>9} {'Status':>8}"
+        )
+    else:
+        sep = "-" * 100
+        lines.append(sep)
+        lines.append(
+            f"{'Rib':>4} {'y[mm]':>8} {'h_box[mm]':>10} {'t_rib[mm]':>10} "
+            f"{'tau_rib[MPa]':>13} {'tau_cr[MPa]':>12} {'MoS':>8} {'Status':>8}"
+        )
     lines.append(sep)
 
     n_pass = 0
     n_fail = 0
+    total_rib_mass = 0.0
     for i in range(len(rwb.y_positions)):
         y_mm = rwb.y_positions[i] * 1000
         h_mm = rwb.h_box_at_station[i] * 1000
@@ -1052,18 +1066,35 @@ def format_rib_web_buckling_table(rwb: RibWebBucklingResult) -> str:
         mos_str = f"{mos:.2f}" if mos < 1000 else "INF"
         thickened = " *" if t_mm > rwb.t_rib_initial_mm + 0.01 else ""
 
-        lines.append(
-            f"{i:4d} {y_mm:8.1f} {h_mm:10.2f} {t_mm:10.1f}"
-            f"{tau_r:13.4f} {tau_c:12.4f} {mos_str:>8} {status:>8}{thickened}"
-        )
+        # Compute individual rib mass if geometry available
+        mass_str = ""
+        if show_mass and i < len(rib_geometries):
+            rib_area = rib_geometries[i].S_total  # [m2]
+            t_rib_m = rwb.t_rib_per_station[i]    # [m]
+            mass_kg = rib_area * t_rib_m * rib_density
+            mass_g = mass_kg * 1000
+            total_rib_mass += mass_g
+            mass_str = f"{mass_g:9.2f}"
+
+        if show_mass:
+            lines.append(
+                f"{i:4d} {y_mm:8.1f} {h_mm:10.2f} {t_mm:10.1f}"
+                f"{tau_r:13.4f} {tau_c:12.4f} {mos_str:>8} {mass_str} {status:>8}{thickened}"
+            )
+        else:
+            lines.append(
+                f"{i:4d} {y_mm:8.1f} {h_mm:10.2f} {t_mm:10.1f}"
+                f"{tau_r:13.4f} {tau_c:12.4f} {mos_str:>8} {status:>8}{thickened}"
+            )
 
     lines.append(sep)
-    lines.append(
-        f"Summary: {n_pass} PASS, {n_fail} FAIL out of {len(rwb.y_positions)} ribs  |  "
-        f"t_rib: {rwb.t_rib_initial_mm:.1f}mm initial, "
-        f"{rwb.t_rib_max_mm:.1f}mm max  |  "
-        f"{rwb.n_thickened} ribs thickened"
-    )
+    summary = (f"Summary: {n_pass} PASS, {n_fail} FAIL out of {len(rwb.y_positions)} ribs  |  "
+               f"t_rib: {rwb.t_rib_initial_mm:.1f}mm initial, "
+               f"{rwb.t_rib_max_mm:.1f}mm max  |  "
+               f"{rwb.n_thickened} ribs thickened")
+    if show_mass:
+        summary += f"  |  Total rib mass: {total_rib_mass:.2f}g"
+    lines.append(summary)
     if rwb.n_thickened > 0:
         lines.append("  (* = thickened from initial value)")
     lines.append(sep)
