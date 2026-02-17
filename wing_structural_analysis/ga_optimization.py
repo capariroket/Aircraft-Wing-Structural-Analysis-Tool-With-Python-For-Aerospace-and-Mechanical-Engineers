@@ -251,7 +251,8 @@ def run_ga_optimization(planform, flight, aero_center, materials, design_space,
                         t_skin_mm=1.0, SF=1.5, h_FS_mm=0.0, h_RS_mm=0.0,
                         theta_max_deg=2.0, rib_parabolic=False,
                         load_dist="elliptic", pitch_dist="chord_weighted",
-                        ga_config=None, s_min_mm=20.0, buckling_mode=1):
+                        ga_config=None, s_min_mm=20.0, buckling_mode=1,
+                        N_Rib_max_factor=2.0, t_skin_step_mm=0.3):
     """
     Run Genetic Algorithm optimization.
 
@@ -289,6 +290,8 @@ def run_ga_optimization(planform, flight, aero_center, materials, design_space,
         pitch_dist_type=pitch_dist_type,
         s_min_mm=s_min_mm,
         buckling_mode=buckling_mode,
+        N_Rib_max_factor=N_Rib_max_factor,
+        t_skin_step_mm=t_skin_step_mm,
     )
 
     problem = WingStructuralProblem(opt_config, design_space)

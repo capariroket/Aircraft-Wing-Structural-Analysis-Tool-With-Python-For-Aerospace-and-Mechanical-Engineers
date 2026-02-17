@@ -72,6 +72,8 @@ DEFAULTS = {
     'SF': 1.0,
     'theta_max_deg': 2.0,  # Maximum allowable tip twist [degrees]
     's_min_mm': 20.0,      # Minimum practical rib spacing [mm]
+    'N_Rib_max_factor': 2.0,  # N_Rib_max = factor * N_Rib_min
+    't_skin_step_mm': 0.3,    # Phase-2 skin thickness increment [mm]
     'rib_profile': 1,  # 1=Rectangular, 2=Parabolic
     'load_dist_type': 1,   # 1=Uniform, 2=Elliptic
     'buckling_mode': 1,    # 1=Shear only, 2=Shear+Compression
@@ -266,6 +268,8 @@ def main():
     SF = get_input("SF (safety factor) [-]", DEFAULTS['SF'])
     theta_max_deg = get_input("θ_max (max tip twist) [deg]", DEFAULTS['theta_max_deg'])
     s_min_mm = get_input("s_min (min rib spacing) [mm]", DEFAULTS['s_min_mm'])
+    N_Rib_max_factor = get_input("N_Rib_max factor (N_Rib_max = factor × N_Rib_min)", DEFAULTS['N_Rib_max_factor'])
+    t_skin_step_mm = get_input("t_skin step (Phase-2 skin increment) [mm]", DEFAULTS['t_skin_step_mm'])
 
     # Rib profile type selection
     print(f"\n  Rib profile type:")
@@ -294,6 +298,8 @@ def main():
     print(f"    Rib profile = {rib_profile_name}")
     print(f"    Lift distribution = {load_dist_name}")
     print(f"    Buckling mode = {buckling_mode_name}")
+    print(f"    N_Rib_max factor = {N_Rib_max_factor:.1f}x (N_Rib_max = {N_Rib_max_factor:.1f} × N_Rib_min)")
+    print(f"    t_skin step = {t_skin_step_mm:.1f} mm (Phase-2 skin increment)")
 
     # ==========================================================================
     # SECTION 5: DESIGN RANGES
@@ -394,7 +400,9 @@ def main():
             load_dist=load_dist, pitch_dist=pitch_dist,
             ga_config=ga_config,
             s_min_mm=s_min_mm,
-            buckling_mode=buckling_mode
+            buckling_mode=buckling_mode,
+            N_Rib_max_factor=N_Rib_max_factor,
+            t_skin_step_mm=t_skin_step_mm
         )
     else:
         best, optimizer = run_optimization(
@@ -406,7 +414,9 @@ def main():
             load_dist=load_dist, pitch_dist=pitch_dist,
             n_workers=n_workers,
             s_min_mm=s_min_mm,
-            buckling_mode=buckling_mode
+            buckling_mode=buckling_mode,
+            N_Rib_max_factor=N_Rib_max_factor,
+            t_skin_step_mm=t_skin_step_mm
         )
 
     if best is None:
@@ -547,10 +557,10 @@ def main():
     # BUILD REPORT OBJECTS
     # ==========================================================================
 
-    optimal_config = OptimalConfig(
-        N_Rib=cfg.N_Rib,
-        t_rib_mm=cfg.t_rib_mm,
-        rib_spacing_mm=planform.L_span / cfg.N_Rib * 1000,
+    S_skin_half = compute_skin_area_half_wing(planform)
+
+    # Common spar/geometry fields shared by both Phase-1 and Phase-2 configs
+    _common_config = dict(
         X_FS_percent=cfg.X_FS_percent,
         X_RS_percent=cfg.X_RS_percent,
         d_FS_outer_mm=cfg.d_FS_outer_mm,
@@ -571,12 +581,42 @@ def main():
         A_Cri_RS_mm2=A_cri_RS * 1e6,
         I_FS_mm4=spar_FS.I * 1e12,
         I_RS_mm4=spar_RS.I * 1e12,
+        S_skin_m2=S_skin_half,
         L_Skin_LE_FS_mm=skin_arcs.L_LE_FS * 1000,
         L_Skin_LE_RS_mm=skin_arcs.L_LE_RS * 1000,
         L_Skin_FS_RS_mm=skin_arcs.L_FS_RS * 1000,
         S_Rib_LE_FS_mm2=rib_outputs.S_Rib_LE_FS_mm2,
         S_Rib_FS_RS_mm2=rib_outputs.S_Rib_FS_RS_mm2,
         S_Rib_mm2=rib_outputs.S_Rib_total_mm2,
+    )
+
+    # --- PHASE-1 config (original N_Rib, user-input t_skin) ---
+    phase1_config = OptimalConfig(
+        N_Rib=cfg.N_Rib,
+        t_rib_mm=cfg.t_rib_mm,
+        rib_spacing_mm=planform.L_span / cfg.N_Rib * 1000,
+        t_skin_mm=t_skin_mm,
+        **_common_config,
+    )
+
+    phase1_mass = MassBreakdown(
+        m_skin=best.mass_skin_p1 if best.mass_skin_p1 > 0 else best.mass_skin,
+        m_FS=best.mass_FS,
+        m_RS=best.mass_RS,
+        m_ribs=best.mass_ribs_p1 if best.mass_ribs_p1 > 0 else best.mass_ribs,
+        m_total=best.mass_total_p1 if best.mass_total_p1 > 0 else best.mass_total,
+    )
+
+    # --- PHASE-2 config (final N_Rib, final t_skin after buckling fix) ---
+    N_Rib_final = best.N_Rib_final if best.N_Rib_final > 0 else cfg.N_Rib
+    rib_spacing_avg = planform.L_span / N_Rib_final * 1000 if N_Rib_final > 0 else 0.0
+
+    phase2_config = OptimalConfig(
+        N_Rib=N_Rib_final,
+        t_rib_mm=cfg.t_rib_mm,
+        rib_spacing_mm=rib_spacing_avg,
+        t_skin_mm=t_skin_final_mm,
+        **_common_config,
     )
 
     mass_breakdown = MassBreakdown(
@@ -792,12 +832,22 @@ def main():
         mass_breakdown.m_total = best.mass_total
 
     # ==========================================================================
-    # PRINT REPORT (config, stress, reactions, materials — no mass/history yet)
+    # PRINT PHASE-1 REPORT (original config, original masses)
     # ==========================================================================
-    report = generate_full_report(optimal_config, mass_breakdown, stress_results,
-                                  root_reactions, mat_names, opt_history,
-                                  include_mass=False, include_history=False)
-    print(report)
+    report_p1 = generate_full_report(phase1_config, phase1_mass, stress_results,
+                                     root_reactions, mat_names, opt_history,
+                                     include_mass=True, include_history=False,
+                                     phase_label="PHASE-1 (Initial Sizing)")
+    print(report_p1)
+
+    # ==========================================================================
+    # PRINT PHASE-2 REPORT (final config after buckling fix, final masses)
+    # ==========================================================================
+    report_p2 = generate_full_report(phase2_config, mass_breakdown, stress_results,
+                                     root_reactions, mat_names, opt_history,
+                                     include_mass=True, include_history=False,
+                                     phase_label="PHASE-2 (After Buckling Fix)")
+    print(report_p2)
 
     # Warnings
     warnings = check_for_warnings(stress_results, mass_breakdown)
@@ -922,7 +972,7 @@ def main():
 
     from dataclasses import asdict
     export_data = {
-        'optimal_config': asdict(optimal_config),
+        'optimal_config': asdict(phase2_config),
         'mass_breakdown': asdict(mass_breakdown),
         'stress_results': asdict(stress_results),
         'root_reactions': asdict(root_reactions),

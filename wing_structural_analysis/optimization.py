@@ -154,6 +154,10 @@ class EvaluationResult:
     t_rib_per_station: Optional[np.ndarray] = None  # Per-station t_rib [m]
     rib_web_n_thickened: int = 0   # Number of ribs thickened for web buckling
     t_rib_max_mm: float = 0.0     # Max t_rib after web buckling fix [mm]
+    # Phase-1 original masses (before Phase-2 updates)
+    mass_skin_p1: float = 0.0     # Phase-1 skin mass [kg]
+    mass_ribs_p1: float = 0.0     # Phase-1 rib mass [kg]
+    mass_total_p1: float = 0.0    # Phase-1 total mass [kg]
 
 
 @dataclass
@@ -187,6 +191,8 @@ class OptimizationConfig:
     s_min_mm: float = 20.0      # Minimum practical rib spacing [mm]
     buckling_margin: float = 0.95  # Safety margin for adaptive insertion
     buckling_mode: int = 1      # 1=shear only, 2=shear+compression
+    N_Rib_max_factor: float = 2.0  # N_Rib_max = factor * N_Rib_min
+    t_skin_step_mm: float = 0.3   # Skin thickness increment in Phase-2 [mm]
 
 
 class GridSearchOptimizer:
@@ -468,6 +474,11 @@ class GridSearchOptimizer:
         result.N_Rib_final = config.N_Rib
         result.t_skin_final_mm = self.opt_config.t_skin_mm
 
+        # Save Phase-1 original masses (before Phase-2 modifies them)
+        result.mass_skin_p1 = result.mass_skin
+        result.mass_ribs_p1 = result.mass_ribs
+        result.mass_total_p1 = result.mass_total
+
         # Phase-1 accepted (buckling not checked yet)
         result.accepted = True
         return result
@@ -485,7 +496,7 @@ class GridSearchOptimizer:
         config = result.config
         planform = self.opt_config.planform
         N_Rib_min = compute_minimum_rib_count(planform.AR, planform.S_ref, planform.c_MGC)
-        N_Rib_max = 2 * N_Rib_min
+        N_Rib_max = int(self.opt_config.N_Rib_max_factor * N_Rib_min)
 
         # Recompute geometry (needed for rib insertion)
         spar_pos = SparPosition(
@@ -520,9 +531,9 @@ class GridSearchOptimizer:
             config.X_FS_percent, config.X_RS_percent,
             self.opt_config.aero_center.x_ac_percent)
 
-        # Try different t_skin values (current, +0.3, +0.6, ...)
+        # Try different t_skin values (current, +step, +2*step, ...)
         t_skin_start_mm = self.opt_config.t_skin_mm
-        t_skin_step_mm = 0.3
+        t_skin_step_mm = self.opt_config.t_skin_step_mm
         t_skin_max_mm = 10.0  # Safety limit
         best_candidate = None
         best_mass = float('inf')
@@ -641,6 +652,8 @@ class GridSearchOptimizer:
             # Only try thicker skin in shear+compression mode
             if self.opt_config.buckling_mode == 1:
                 break  # Shear-only: if current t_skin fails, can't help by thickening
+            if t_skin_step_mm <= 0:
+                break  # User disabled skin thickening (step=0)
             t_skin_mm += t_skin_step_mm
 
         # Apply best candidate to result
@@ -844,7 +857,7 @@ class GridSearchOptimizer:
 
         planform = self.opt_config.planform
         N_Rib_min = compute_minimum_rib_count(planform.AR, planform.S_ref, planform.c_MGC)
-        N_Rib_max = 2 * N_Rib_min
+        N_Rib_max = int(self.opt_config.N_Rib_max_factor * N_Rib_min)
 
         print(f"\n{'='*50}")
         print(f"PHASE-2: Buckling Fix for Top-{n_top}")
@@ -852,7 +865,7 @@ class GridSearchOptimizer:
         print(f"  N_Rib_min = {N_Rib_min}, N_Rib_max = {N_Rib_max}")
         print(f"  t_skin_start = {self.opt_config.t_skin_mm:.1f} mm")
         if self.opt_config.buckling_mode == 2:
-            print(f"  t_skin step = 0.3 mm (will increase if needed)")
+            print(f"  t_skin step = {self.opt_config.t_skin_step_mm:.1f} mm (will increase if needed)")
 
         start_p2 = time.time()
         phase2_results = []
@@ -1000,8 +1013,10 @@ def run_optimization(planform: PlanformParams,
                      pitch_dist: str = "chord_weighted",
                      n_workers: int = 1,
                      s_min_mm: float = 20.0,
-                     buckling_mode: int = 1) -> Tuple[Optional[EvaluationResult],
-                                                       GridSearchOptimizer]:
+                     buckling_mode: int = 1,
+                     N_Rib_max_factor: float = 2.0,
+                     t_skin_step_mm: float = 0.3) -> Tuple[Optional[EvaluationResult],
+                                                            GridSearchOptimizer]:
     """
     Convenience function to run two-phase optimization.
 
@@ -1039,6 +1054,8 @@ def run_optimization(planform: PlanformParams,
         pitch_dist_type=pitch_dist_type,
         s_min_mm=s_min_mm,
         buckling_mode=buckling_mode,
+        N_Rib_max_factor=N_Rib_max_factor,
+        t_skin_step_mm=t_skin_step_mm,
     )
 
     optimizer = GridSearchOptimizer(opt_config, design_space)

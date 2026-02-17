@@ -77,6 +77,10 @@ class OptimalConfig:
     S_Rib_FS_RS_mm2: float
     S_Rib_mm2: float
 
+    # Skin parameters (defaults so they are optional for backward compat)
+    t_skin_mm: float = 0.0          # Skin thickness [mm]
+    S_skin_m2: float = 0.0          # Skin area (half-wing) [m²]
+
 
 @dataclass
 class StressResults:
@@ -143,11 +147,19 @@ class OptimizationHistory:
 # TEXT REPORT GENERATION
 # =============================================================================
 
-def generate_header() -> str:
-    """Generate report header."""
+def generate_header(phase_label: str = "") -> str:
+    """Generate report header.
+
+    Args:
+        phase_label: Optional label like "PHASE-1" or "PHASE-2 (Final)" to
+                     append to the title line.
+    """
+    title = "HALF-WING STRUCTURAL SIZING - OPTIMIZATION RESULTS"
+    if phase_label:
+        title += f"  [{phase_label}]"
     lines = [
         "=" * 70,
-        "HALF-WING STRUCTURAL SIZING - OPTIMIZATION RESULTS",
+        title,
         "=" * 70,
         f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         "-" * 70,
@@ -165,7 +177,7 @@ def generate_optimal_params_section(config: OptimalConfig) -> str:
         "Rib Parameters:",
         f"  N_Rib                    = {config.N_Rib}",
         f"  t_rib                    = {config.t_rib_mm:.2f} mm",
-        f"  Rib spacing              = {config.rib_spacing_mm:.2f} mm",
+        f"  Rib spacing (avg)        = {config.rib_spacing_mm:.2f} mm",
         "",
         "Spar Positions:",
         f"  X_FS                     = {config.X_FS_percent:.1f}% chord ({config.X_FS_mm:.2f} mm at root)",
@@ -192,6 +204,10 @@ def generate_optimal_params_section(config: OptimalConfig) -> str:
         "Load Sharing:",
         f"  η_FS                     = {config.eta_FS_percent:.1f}%",
         f"  η_RS                     = {config.eta_RS_percent:.1f}%",
+        "",
+        "Skin Parameters:",
+        f"  t_skin                   = {config.t_skin_mm:.2f} mm",
+        f"  S_skin (half-wing)       = {config.S_skin_m2*1e4:.2f} cm² ({config.S_skin_m2:.6f} m²)",
         "",
         "Skin Arc Lengths (root):",
         f"  L_(Skin root LE-FS)      = {config.L_Skin_LE_FS_mm:.2f} mm",
@@ -326,15 +342,17 @@ def generate_full_report(config: OptimalConfig,
                          materials: Dict[str, str],
                          history: Optional[OptimizationHistory] = None,
                          include_mass: bool = True,
-                         include_history: bool = True) -> str:
+                         include_history: bool = True,
+                         phase_label: str = "") -> str:
     """Generate complete text report.
 
     Args:
         include_mass: If False, MASS BREAKDOWN section is omitted (caller prints it separately).
         include_history: If False, OPTIMIZATION HISTORY section is omitted (caller prints it separately).
+        phase_label: Optional label like "PHASE-1" appended to the report header.
     """
     sections = [
-        generate_header(),
+        generate_header(phase_label),
         generate_optimal_params_section(config),
     ]
 
