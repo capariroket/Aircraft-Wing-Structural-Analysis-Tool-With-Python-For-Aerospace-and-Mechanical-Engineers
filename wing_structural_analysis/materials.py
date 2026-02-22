@@ -64,7 +64,7 @@ DEFAULT_MATERIALS: Dict[str, Material] = {
         E=145e9,            # 135 GPa
         nu=0.3,
         density=1500,       # kg/m³
-        sigma_u=2000e6,     # 1500 MPa
+        sigma_u=2080e6,     # 1500 MPa
         tau_u=120e6          # 120 MPa (interlaminar)
     ),
     'GFRP': Material(
