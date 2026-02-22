@@ -10,7 +10,8 @@ import numpy as np
 from typing import Optional
 
 from materials import MaterialDatabase, MaterialSelection
-from geometry import (PlanformParams, SparPosition, compute_all_stations,
+from geometry import (PlanformParams, SparPosition, SectionGeometry,
+                      compute_all_stations,
                       compute_spar_sweep_angle, compute_skin_arc_lengths_root,
                       compute_skin_area_half_wing, compute_rib_areas_root)
 from loads import (FlightCondition, AeroCenter, analyze_loads,
@@ -43,21 +44,33 @@ from plots import PlotConfig, generate_all_plots
 
 DEFAULTS = {
     # Flight science
-    'C_m': -0.003,
-    'AR': 11.0,
-    'lambda_taper': 0.45,
-    'V_c': 21.0,
+    'C_m_cruise': 0.0,        # Pitching moment coeff. (cruise)
+    'C_m': -0.262,            # Pitching moment coeff. (n=2)
+    'AR': 11.030,
+    'lambda_taper': 0.649,    # Average taper ratio
+    'V_c': 21.480,
     'n': 2.0,
-    'S_ref': 3.17,
-    'W_0': 650.0,
-    'rho_air': 1.223,
+    'S_ref': 1.519,
+    'W_0': 29026.0 / 9.81,   # MTOW [N]  (29026 N → ≈2960 N weight; kept as N)
+    'W_0_N': 284.74,         # MTOW as force [N]  (29.026 kg × 9.81 = 284.74 N)
+    'rho_air': 1.112,
     'x_ac_percent': 25.0,
     'Lambda_ac_deg': 0.0,
 
-    # Geometry
-    'b': 5.195,
+    # Wing section configuration
+    'wing_sections': 2,       # 1 = single section, 2 = double section
+
+    # Single-section geometry (used when wing_sections == 1)
+    'b': 4.093,
     't_over_c': 0.17,
-    # Note: C_r, c_MGC, Y_bar, h_box, N_Rib are now calculated from formulas, not user inputs
+
+    # Double-section geometry (used when wing_sections == 2)
+    'c_root_s1': 0.450,       # Root Chord Section-1 [m]
+    'c_tip_s1':  0.450,       # Tip  Chord Section-1 [m]
+    'c_root_s2': 0.450,       # Root Chord Section-2 [m]
+    'c_tip_s2':  0.155,       # Tip  Chord Section-2 [m]
+    'b_s1': 0.950,            # Section-1 Half Span [m]
+    'b_s2': 1.097,            # Section-2 Half Span [m]
 
     # Material limits (legacy)
     'sigma_max_composite_MPa': 300.0,
@@ -69,19 +82,19 @@ DEFAULTS = {
 
     # Structural
     't_skin_mm': 1.2,
-    'SF': 1.0,
-    'theta_max_deg': 2.0,  # Maximum allowable tip twist [degrees]
-    's_min_mm': 20.0,      # Minimum practical rib spacing [mm]
-    'N_Rib_max_factor': 2.0,  # N_Rib_max = factor * N_Rib_min
-    't_skin_step_mm': 0.3,    # Phase-2 skin thickness increment [mm]
-    'rib_profile': 1,  # 1=Rectangular, 2=Parabolic
-    'load_dist_type': 1,   # 1=Uniform, 2=Elliptic
-    'buckling_mode': 1,    # 1=Shear only, 2=Shear+Compression
+    'SF': 3.8,
+    'theta_max_deg': 2.0,
+    's_min_mm': 20.0,
+    'N_Rib_max_factor': 2.0,
+    't_skin_step_mm': 0.3,
+    'rib_profile': 1,
+    'load_dist_type': 3,   # 1=Uniform, 2=Elliptic, 3=Simplified
+    'buckling_mode': 1,
 
-    # Design ranges (default single values -> will be expanded to ranges)
+    # Design ranges
     't_rib_mm': 3.0,
-    'X_FS_percent': 22.5,
-    'X_RS_percent': 52.5,
+    'X_FS_percent': 15.0,
+    'X_RS_percent': 60.0,
     'd_FS_outer_mm': 23.0,
     'd_RS_outer_mm': 17.5,
     't_FS_mm': 1.75,
@@ -190,13 +203,12 @@ def main():
     print("SECTION 1: Flight Science / Aero Parameters")
     print("=" * 50)
 
-    C_m = get_input("C_m [-]", DEFAULTS['C_m'])
+    C_m = get_input("C_m [-] (pitching moment coeff. at n=2)", DEFAULTS['C_m'])
     AR = get_input("AR [-]", DEFAULTS['AR'])
-    lambda_taper = get_input("λ (taper ratio) [-]", DEFAULTS['lambda_taper'])
     V_c = get_input("V_c [m/s]", DEFAULTS['V_c'])
     n = get_input("n (load factor) [-]", DEFAULTS['n'])
     S_ref = get_input("S_ref [m²]", DEFAULTS['S_ref'])
-    W_0 = get_input("W_0 [N]", DEFAULTS['W_0'])
+    W_0 = get_input("W_0 [N] (MTOW as force)", DEFAULTS['W_0_N'])
     rho_air = get_input("ρ_air [kg/m³]", DEFAULTS['rho_air'])
     x_ac_percent = get_input("x_ac [% chord]", DEFAULTS['x_ac_percent'])
     Lambda_ac_deg = get_input("Λ_ac [deg]", DEFAULTS['Lambda_ac_deg'])
@@ -208,35 +220,151 @@ def main():
     print("SECTION 2: Geometry Parameters")
     print("=" * 50)
 
-    b = get_input("b (wingspan) [m]", DEFAULTS['b'])
     t_over_c = get_input("t/c [-]", DEFAULTS['t_over_c'])
 
-    # Calculate C_r from formula: C_r = 2 * S_ref / (b * (1 + λ))
-    C_r = 2 * S_ref / (b * (1 + lambda_taper))  # [m]
-    C_r_mm = C_r * 1000  # [mm]
+    # ------------------------------------------------------------------
+    # Wing section configuration: single (1) or double (2)
+    # ------------------------------------------------------------------
+    print("\n  Wing section configuration:")
+    print("    1 = Single section  (one taper segment, root→tip)")
+    print("    2 = Double section  (two taper segments, e.g. inner + outer panel)")
+    wing_sections = get_input("  Number of wing sections (1 or 2)", DEFAULTS['wing_sections'], int)
+    if wing_sections not in (1, 2):
+        wing_sections = 1
+        print("  Invalid selection – defaulting to single section.")
 
-    # Calculate c_MGC from formula: c_MGC = (4/3) * sqrt(S_ref/AR) * ((1 + λ + λ²) / (1 + 2λ + λ²))
-    c_MGC = (4 / 3) * np.sqrt(S_ref / AR) * ((1 + lambda_taper + lambda_taper**2) / (1 + 2*lambda_taper + lambda_taper**2))
+    if wing_sections == 1:
+        # ---- SINGLE SECTION ----
+        b = get_input("b (wingspan) [m]", DEFAULTS['b'])
+        lambda_taper = get_input("λ (taper ratio) [-]", DEFAULTS['lambda_taper'])
 
-    # Calculate Ȳ from formula: Ȳ = (b/6) * ((1 + 2λ) / (1 + λ)) * 1000
-    Y_bar_mm = (b / 6) * ((1 + 2 * lambda_taper) / (1 + lambda_taper)) * 1000
+        # Derived geometry
+        C_r = 2 * S_ref / (b * (1 + lambda_taper))              # root chord [m]
+        C_r_mm = C_r * 1000
 
-    # Calculate N_Rib from formula: N_Rib = ceil(1 + sqrt(AR * S_ref) / c_MGC)
+        c_MGC = (4 / 3) * np.sqrt(S_ref / AR) * (
+            (1 + lambda_taper + lambda_taper**2) /
+            (1 + 2 * lambda_taper + lambda_taper**2)
+        )
+
+        Y_bar_mm = (b / 6) * ((1 + 2 * lambda_taper) / (1 + lambda_taper)) * 1000
+
+        # Section geometry summary (for downstream use)
+        c_root_s1 = C_r
+        c_tip_s1  = lambda_taper * C_r
+        b_s1      = b / 2   # half-span (section 1 = full half-wing)
+        c_root_s2 = None
+        c_tip_s2  = None
+        b_s2      = None
+
+    else:
+        # ---- DOUBLE SECTION ----
+        print("\n  Enter Section-1 parameters (inner panel):")
+        c_root_s1 = get_input("  Root Chord [m] Section-1", DEFAULTS['c_root_s1'])
+        c_tip_s1  = get_input("  Tip  Chord [m] Section-1", DEFAULTS['c_tip_s1'])
+        b_s1      = get_input("  Section-1 Half Span [m]",  DEFAULTS['b_s1'])
+
+        print("\n  Enter Section-2 parameters (outer panel):")
+        c_root_s2 = get_input("  Root Chord [m] Section-2", DEFAULTS['c_root_s2'])
+        c_tip_s2  = get_input("  Tip  Chord [m] Section-2", DEFAULTS['c_tip_s2'])
+        b_s2      = get_input("  Section-2 Half Span [m]",  DEFAULTS['b_s2'])
+
+        # --- Derived parameters from two-section geometry ---
+        # Total half-span
+        L_half_total = b_s1 + b_s2
+        b = 2 * L_half_total  # full wingspan [m]
+
+        # Area of each trapezoidal section
+        S1 = 0.5 * (c_root_s1 + c_tip_s1) * b_s1  # Section-1 planform area (one side)
+        S2 = 0.5 * (c_root_s2 + c_tip_s2) * b_s2  # Section-2 planform area (one side)
+        S_half = S1 + S2
+        # Override user-supplied S_ref with the geometry-derived value (both sides)
+        S_ref_derived = 2 * S_half
+        print(f"\n  NOTE: S_ref derived from section geometry = {S_ref_derived:.4f} m²  "
+              f"(user entered {S_ref:.4f} m²)")
+        use_derived_Sref = get_input(
+            "  Use geometry-derived S_ref? (1=yes, 0=keep user value)", 1, int)
+        if use_derived_Sref:
+            S_ref = S_ref_derived
+
+        # Root chord of the whole wing = root chord of Section-1
+        C_r = c_root_s1
+        C_r_mm = C_r * 1000
+
+        # Effective taper ratio (tip of last section / root chord)
+        c_tip_overall = c_tip_s2
+        lambda_taper_geo = c_tip_overall / C_r   # geometric (section-derived)
+
+        # Average taper ratio for standard formulas (user can override)
+        # Default: geometric value, but user may supply a different "average" λ
+        print(f"\n  Effective geometric taper ratio (c_tip_s2/c_root_s1) = {lambda_taper_geo:.4f}")
+        print(f"  You may enter a different 'Average Taper Ratio' for Ȳ/c_MGC formulas.")
+        lambda_taper = get_input("  Average Taper Ratio λ [-]", DEFAULTS['lambda_taper'])
+
+        # Aspect ratio from derived values
+        AR_derived = b**2 / S_ref
+        print(f"  AR derived = {AR_derived:.3f}  (user entered {AR:.3f})")
+        use_derived_AR = get_input(
+            "  Use geometry-derived AR? (1=yes, 0=keep user value)", 1, int)
+        if use_derived_AR:
+            AR = AR_derived
+
+        # Mean Geometric Chord (MGC) — weighted by area and span
+        # MGC of each trapezoidal section:
+        #   c_mgc_i = (2/3) * c_root_i * (1 + λ_i + λ_i²) / (1 + λ_i)
+        lam1 = c_tip_s1 / c_root_s1 if c_root_s1 > 0 else 1.0
+        lam2 = c_tip_s2 / c_root_s2 if c_root_s2 > 0 else 1.0
+        c_mgc_s1 = (2 / 3) * c_root_s1 * (1 + lam1 + lam1**2) / (1 + lam1)
+        c_mgc_s2 = (2 / 3) * c_root_s2 * (1 + lam2 + lam2**2) / (1 + lam2)
+        # Area-weighted MGC
+        c_MGC = (c_mgc_s1 * S1 + c_mgc_s2 * S2) / S_half if S_half > 0 else c_mgc_s1
+
+        # Spanwise centroid of each section (relative to wing root)
+        # For a trapezoidal section: ȳ = y_start + (b_i/3)*((c_root+2*c_tip)/(c_root+c_tip))
+        y_cen_s1 = (b_s1 / 3) * ((c_root_s1 + 2 * c_tip_s1) / (c_root_s1 + c_tip_s1))
+        y_cen_s2 = b_s1 + (b_s2 / 3) * ((c_root_s2 + 2 * c_tip_s2) / (c_root_s2 + c_tip_s2))
+        # Area-weighted overall Ȳ  (trapezoidal centroid method)
+        Y_bar_m_trap = (y_cen_s1 * S1 + y_cen_s2 * S2) / S_half if S_half > 0 else y_cen_s1
+
+        # Standard formula Ȳ = (b/6) × (1+2λ) / (1+λ) using effective taper
+        Y_bar_m_std = (b / 6) * ((1 + 2 * lambda_taper) / (1 + lambda_taper))
+
+        # Ask user which method to use
+        print(f"\n  Ȳ (MGC spanwise position) options:")
+        print(f"    1 = Trapezoidal centroid (area-weighted): {Y_bar_m_trap*1000:.2f} mm")
+        print(f"    2 = Standard formula (b/6)×(1+2λ)/(1+λ): {Y_bar_m_std*1000:.2f} mm")
+        ybar_choice = get_input("  Select Ȳ method (1 or 2)", 2, int)
+        Y_bar_m  = Y_bar_m_std if ybar_choice == 2 else Y_bar_m_trap
+        Y_bar_mm = Y_bar_m * 1000
+
+    # Common derived geometry (same for both single and double section)
     N_Rib = int(np.ceil(1 + np.sqrt(AR * S_ref) / c_MGC))
-
-    # Calculate additional geometry values
     L_span = b / 2  # Half-wing span [m]
-    c_tip = lambda_taper * C_r  # Tip chord [m]
+    # For planform geometry (chord distribution), use geometric taper ratio.
+    # For single section: lambda_taper already IS the geometric value.
+    # For double section: lambda_taper_geo is the geometric value.
+    if wing_sections == 2:
+        lambda_taper_planform = lambda_taper_geo   # actual chord taper for chord_at_station()
+    else:
+        lambda_taper_planform = lambda_taper
+    c_tip = lambda_taper_planform * C_r  # Overall tip chord [m]
     h_box_root = t_over_c * C_r  # Wing box height at root [m]
+    Y_bar_m = Y_bar_mm / 1000   # [m]
 
     print(f"\n  Calculated geometry parameters:")
-    print(f"    L_span (half-wing span) = {L_span*1000:.2f} mm ({L_span:.4f} m)")
-    print(f"    C_r (root chord) = {C_r_mm:.2f} mm")
-    print(f"    c_tip (tip chord) = {c_tip*1000:.2f} mm")
-    print(f"    c_MGC (mean geometric chord) = {c_MGC*1000:.2f} mm ({c_MGC:.4f} m)")
-    print(f"    Ȳ (MGC spanwise position) = {Y_bar_mm:.2f} mm")
-    print(f"    h_box (wing box height at root) = {h_box_root*1000:.2f} mm")
+    print(f"    Wing sections          = {wing_sections}")
+    print(f"    b (wingspan)           = {b:.4f} m")
+    print(f"    L_span (half-span)     = {L_span*1000:.2f} mm ({L_span:.4f} m)")
+    print(f"    C_r (root chord)       = {C_r_mm:.2f} mm")
+    print(f"    c_tip (tip chord)      = {c_tip*1000:.2f} mm")
+    print(f"    λ (taper ratio)        = {lambda_taper:.4f}")
+    print(f"    c_MGC                  = {c_MGC*1000:.2f} mm ({c_MGC:.4f} m)")
+    print(f"    Ȳ (MGC spanwise pos.)  = {Y_bar_mm:.2f} mm")
+    print(f"    h_box at root          = {h_box_root*1000:.2f} mm")
     print(f"    N_Rib (number of ribs) = {N_Rib}")
+    if wing_sections == 2:
+        print(f"    Section-1: {c_root_s1*1000:.1f}mm → {c_tip_s1*1000:.1f}mm  over {b_s1*1000:.1f}mm half-span")
+        print(f"    Section-2: {c_root_s2*1000:.1f}mm → {c_tip_s2*1000:.1f}mm  over {b_s2*1000:.1f}mm half-span")
 
     # ==========================================================================
     # SECTION 3: MATERIALS
@@ -282,7 +410,8 @@ def main():
     print(f"\n  Lift distribution type:")
     print(f"    1 = Uniform")
     print(f"    2 = Elliptic")
-    load_dist_type = get_input("  Select lift distribution (1 or 2)", DEFAULTS['load_dist_type'], int)
+    print(f"    3 = Simplified  (closed-form: M_root = n·W₀·Ȳ/2,  T_root = q·(S/2)·Ȳ·Cm)")
+    load_dist_type = get_input("  Select lift distribution (1, 2 or 3)", DEFAULTS['load_dist_type'], int)
     pitch_dist_type = load_dist_type  # Match pitch distribution to lift
 
     # Buckling mode selection
@@ -291,7 +420,7 @@ def main():
     print(f"    2 = Shear + Compression buckling")
     buckling_mode = get_input("  Select buckling mode (1 or 2)", DEFAULTS['buckling_mode'], int)
 
-    load_dist_name = "Elliptic" if load_dist_type == 2 else "Uniform"
+    load_dist_name = {1: "Uniform", 2: "Elliptic", 3: "Simplified"}.get(load_dist_type, "Uniform")
     buckling_mode_name = "Shear + Compression" if buckling_mode == 2 else "Shear only"
 
     print(f"\n  Selected parameters:")
@@ -316,12 +445,12 @@ def main():
 
     print("\nFront Spar Parameters:")
     X_FS_range = get_range_input("X_FS%", "%", 15.0, 30.0, 5.0)
-    d_FS_range = get_range_input("d_FS_outer", "mm", 16.0, 30.0, 2.0)
+    d_FS_range = get_range_input("d_FS_outer", "mm", 20.0, 30.0, 2.0)
     t_FS_range = get_range_input("t_FS", "mm", 0.5, 3.0, 0.5)
 
     print("\nRear Spar Parameters:")
     X_RS_range = get_range_input("X_RS%", "%", 40.0, 65.0, 5.0)
-    d_RS_range = get_range_input("d_RS_outer", "mm", 10.0, 25.0, 5.0)
+    d_RS_range = get_range_input("d_RS_outer", "mm", 12.0, 25.0, 3.0)
     t_RS_range = get_range_input("t_RS", "mm", 0.5, 3.0, 0.5)
 
     design_space = DesignSpace(
@@ -371,9 +500,15 @@ def main():
 
     # Create objects
     planform = PlanformParams.from_input(
-        b=b, AR=AR, taper_ratio=lambda_taper, t_c=t_over_c,
+        b=b, AR=AR, taper_ratio=lambda_taper_planform, t_c=t_over_c,
         S_ref=S_ref, C_r_mm=C_r_mm, c_MGC=c_MGC, Y_bar_mm=Y_bar_mm
     )
+    # Attach multi-section geometry if double section was selected
+    if wing_sections == 2 and c_root_s2 is not None:
+        planform.sections = [
+            SectionGeometry(c_root=c_root_s1, c_tip=c_tip_s1, b_section=b_s1),
+            SectionGeometry(c_root=c_root_s2, c_tip=c_tip_s2, b_section=b_s2),
+        ]
 
     flight = FlightCondition(
         W0=W_0, n=n, V_c=V_c, rho=rho_air,
@@ -382,7 +517,12 @@ def main():
 
     aero_center = AeroCenter(x_ac_percent=x_ac_percent, Lambda_ac_deg=Lambda_ac_deg)
 
-    load_dist = "elliptic" if load_dist_type == 2 else "uniform"
+    if load_dist_type == 2:
+        load_dist = "elliptic"
+    elif load_dist_type == 3:
+        load_dist = "simplified"
+    else:
+        load_dist = "uniform"
     pitch_dist = "chord_weighted" if pitch_dist_type == 2 else "uniform"
 
     # Calculate wing box height at root for assembly check (h_FS = h_RS = t/c * C_r)
@@ -402,7 +542,8 @@ def main():
             s_min_mm=s_min_mm,
             buckling_mode=buckling_mode,
             N_Rib_max_factor=N_Rib_max_factor,
-            t_skin_step_mm=t_skin_step_mm
+            t_skin_step_mm=t_skin_step_mm,
+            Y_bar_m=Y_bar_m,
         )
     else:
         best, optimizer = run_optimization(
@@ -416,7 +557,8 @@ def main():
             s_min_mm=s_min_mm,
             buckling_mode=buckling_mode,
             N_Rib_max_factor=N_Rib_max_factor,
-            t_skin_step_mm=t_skin_step_mm
+            t_skin_step_mm=t_skin_step_mm,
+            Y_bar_m=Y_bar_m,
         )
 
     if best is None:
@@ -445,10 +587,16 @@ def main():
     box_width = np.array([s.width for s in stations])
 
     # Load analysis
-    ld_type = LoadDistributionType.ELLIPTIC if load_dist_type == 2 else LoadDistributionType.UNIFORM
+    if load_dist_type == 2:
+        ld_type = LoadDistributionType.ELLIPTIC
+    elif load_dist_type == 3:
+        ld_type = LoadDistributionType.SIMPLIFIED
+    else:
+        ld_type = LoadDistributionType.UNIFORM
     pd_type = PitchMomentDistributionType.CHORD_WEIGHTED if pitch_dist_type == 2 else PitchMomentDistributionType.UNIFORM
 
-    loads = analyze_loads(y, chord, x_FS, x_RS, flight, aero_center, planform.L_span, ld_type, pd_type)
+    loads = analyze_loads(y, chord, x_FS, x_RS, flight, aero_center, planform.L_span, ld_type, pd_type,
+                          Y_bar_m=Y_bar_m)
     reactions = compute_root_reactions(loads)
 
     # Torsion (use Phase-2 final t_skin if it was adjusted)
@@ -646,15 +794,15 @@ def main():
         if sol.tau_skin_max > tau_allow:
             errors.append(f"Skin stress: {sol.tau_skin_max/1e6:.2f} > {tau_allow/1e6:.2f} MPa")
 
-        # 2. Front spar interaction: (σ/σ_allow) + (τ/τ_allow)² < 1
-        FS_interaction = (sol.sigma_b_FS_max / sigma_allow) + (sol.tau_FS_max / tau_allow_spar) ** 2
-        if FS_interaction >= 1.0:
-            errors.append(f"FS interaction: {FS_interaction:.3f} >= 1.0")
+        # 2. Front spar Von Mises: sqrt(σ² + 3τ²) < σ_allow
+        sigma_vm_FS_check = (sol.sigma_b_FS_max**2 + 3*sol.tau_FS_max**2)**0.5
+        if sigma_vm_FS_check >= sigma_allow:
+            errors.append(f"FS Von Mises: {sigma_vm_FS_check/1e6:.2f} >= {sigma_allow/1e6:.2f} MPa")
 
-        # 3. Rear spar interaction: (σ/σ_allow) + (τ/τ_allow)² < 1
-        RS_interaction = (sol.sigma_b_RS_max / sigma_allow) + (sol.tau_RS_max / tau_allow_spar) ** 2
-        if RS_interaction >= 1.0:
-            errors.append(f"RS interaction: {RS_interaction:.3f} >= 1.0")
+        # 3. Rear spar Von Mises: sqrt(σ² + 3τ²) < σ_allow
+        sigma_vm_RS_check = (sol.sigma_b_RS_max**2 + 3*sol.tau_RS_max**2)**0.5
+        if sigma_vm_RS_check >= sigma_allow:
+            errors.append(f"RS Von Mises: {sigma_vm_RS_check/1e6:.2f} >= {sigma_allow/1e6:.2f} MPa")
 
         # 4. Front spar area: A_Act_FS > A_Cri_FS
         if sol.A_Act_FS <= sol.A_Cri_FS:
@@ -961,6 +1109,7 @@ def main():
         allowables={'tau_allow_skin': tau_allow, 'sigma_allow_spar': sigma_allow},
         config=plot_config,
         phase2_data=phase2_plot_data,
+        sections=getattr(planform, 'sections', None),
     )
 
     # ==========================================================================

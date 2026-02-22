@@ -128,5 +128,5 @@ CALCULATED MASSES FORMULAS
 	m_Skin=ρ_Skin⋅(2⋅t_skin \/1000)⋅(√((AR⋅S_ref ) ))⋅(L_(Skin oot E-RS)⋅(1+λ)\/1000)\/8
 	m_Ribs=N_Rib⋅S_Rib⋅(10^(-8) )⋅ρ_(Internal tructure)⋅(1+λ^2 )⋅2⋅t_rib⋅0.25
 	m_Total=m_Spars+m_Skin+m_Ribs
-
+cd "c:\Users\ayber\OneDrive\Masaüstü\kanat 3\wing_structural_analysis" ; C:/Users/ayber/AppData/Local/Microsoft/WindowsApps/python3.13.exe main.py
 

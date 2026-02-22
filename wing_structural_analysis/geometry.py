@@ -9,9 +9,17 @@ User interface accepts mm where noted.
 """
 
 import numpy as np
-from dataclasses import dataclass
-from typing import List, Tuple
+from dataclasses import dataclass, field
+from typing import List, Tuple, Optional
 import math
+
+
+@dataclass
+class SectionGeometry:
+    """Geometry for one taper section of the wing."""
+    c_root: float   # Root chord of this section [m]
+    c_tip: float    # Tip chord of this section [m]
+    b_section: float  # Span of this section [m]
 
 
 @dataclass
@@ -25,6 +33,12 @@ class PlanformParams:
     C_r: float          # Root chord [m]
     c_MGC: float        # Mean geometric chord [m]
     Y_bar: float        # y distance from root to MGC [m]
+    sections: Optional[List[SectionGeometry]] = field(default=None, repr=False)
+
+    @property
+    def is_multi_section(self) -> bool:
+        """True if wing has multiple taper sections."""
+        return self.sections is not None and len(self.sections) > 1
 
     @property
     def L_span(self) -> float:
@@ -84,6 +98,32 @@ def chord_at_station(y: float, C_r: float, C_tip: float, L_span: float) -> float
         Chord at station y [m]
     """
     return C_r - (C_r - C_tip) * (y / L_span)
+
+
+def chord_at_station_multi(y: float, sections: List[SectionGeometry]) -> float:
+    """
+    Calculate chord at spanwise station y for a multi-section wing.
+
+    Each section is a trapezoidal segment with its own root/tip chord
+    and span.  Sections are concatenated root-to-tip.
+
+    Args:
+        y: Spanwise position from root [m]
+        sections: List of SectionGeometry (ordered root→tip)
+
+    Returns:
+        Chord at station y [m]
+    """
+    y_start = 0.0
+    for sec in sections:
+        y_end = y_start + sec.b_section
+        if y <= y_end or sec is sections[-1]:
+            eta = (y - y_start) / sec.b_section if sec.b_section > 0 else 0.0
+            eta = max(0.0, min(1.0, eta))
+            return sec.c_root + (sec.c_tip - sec.c_root) * eta
+        y_start = y_end
+    # Fallback (should not reach here)
+    return sections[-1].c_tip
 
 
 def generate_rib_stations(N_Rib: int, L_span: float) -> np.ndarray:
@@ -183,6 +223,9 @@ def compute_wing_box_section(y: float, planform: PlanformParams,
     """
     Compute wing-box cross-section properties at station y.
 
+    Uses multi-section chord interpolation when planform has multiple
+    taper sections, otherwise falls back to single linear taper.
+
     Args:
         y: Spanwise position [m]
         planform: Planform parameters
@@ -191,7 +234,10 @@ def compute_wing_box_section(y: float, planform: PlanformParams,
     Returns:
         WingBoxSection with computed properties
     """
-    chord = chord_at_station(y, planform.C_r, planform.c_tip, planform.L_span)
+    if planform.is_multi_section:
+        chord = chord_at_station_multi(y, planform.sections)
+    else:
+        chord = chord_at_station(y, planform.C_r, planform.c_tip, planform.L_span)
     x_FS = spar_pos.x_FS_at_station(chord)
     x_RS = spar_pos.x_RS_at_station(chord)
     h_box = planform.t_c * chord

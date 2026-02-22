@@ -61,11 +61,11 @@ DEFAULT_MATERIALS: Dict[str, Material] = {
     ),
     'CFRP_UD': Material(
         name='Carbon Fiber UD (longitudinal)',
-        E=145e9,            # 135 GPa
+        E=145e9,            # 145 GPa
         nu=0.3,
         density=1500,       # kg/m³
-        sigma_u=2000e6,     # 1500 MPa
-        tau_u=120e6          # 120 MPa (interlaminar)
+        sigma_u=2080e6,     # 2080 MPa
+        tau_u=500e6          # 500 MPa (in-plane shear, CFRP tube)
     ),
     'GFRP': Material(
         name='Glass Fiber Reinforced Polymer',

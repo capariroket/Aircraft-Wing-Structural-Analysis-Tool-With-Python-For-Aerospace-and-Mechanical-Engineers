@@ -211,15 +211,13 @@ class WingStructuralProblem(ElementwiseProblem):
         has_phase2 = (result.A_Act_FS > 0)
         if has_phase2:
             sigma_allow = allowables['sigma_allow_spar']
-            tau_allow = allowables['tau_allow_spar']
 
-            FS_int = (result.sigma_b_FS_max / sigma_allow) + \
-                     (result.tau_FS_max / tau_allow) ** 2
-            g[1] = FS_int - 1.0
+            # Von Mises criterion: sqrt(σ² + 3τ²) < σ_allow
+            sigma_vm_FS = (result.sigma_b_FS_max**2 + 3*result.tau_FS_max**2)**0.5
+            g[1] = sigma_vm_FS / sigma_allow - 1.0
 
-            RS_int = (result.sigma_b_RS_max / sigma_allow) + \
-                     (result.tau_RS_max / tau_allow) ** 2
-            g[2] = RS_int - 1.0
+            sigma_vm_RS = (result.sigma_b_RS_max**2 + 3*result.tau_RS_max**2)**0.5
+            g[2] = sigma_vm_RS / sigma_allow - 1.0
 
             g[3] = result.A_Cri_FS - result.A_Act_FS
             g[4] = result.A_Cri_RS - result.A_Act_RS
@@ -252,7 +250,7 @@ def run_ga_optimization(planform, flight, aero_center, materials, design_space,
                         theta_max_deg=2.0, rib_parabolic=False,
                         load_dist="elliptic", pitch_dist="chord_weighted",
                         ga_config=None, s_min_mm=20.0, buckling_mode=1,
-                        N_Rib_max_factor=2.0, t_skin_step_mm=0.3):
+                        N_Rib_max_factor=2.0, t_skin_step_mm=0.3, Y_bar_m=None):
     """
     Run Genetic Algorithm optimization.
 
@@ -270,7 +268,8 @@ def run_ga_optimization(planform, flight, aero_center, materials, design_space,
         ga_config = GAConfig()
 
     load_dist_type = (LoadDistributionType.ELLIPTIC if load_dist == "elliptic"
-                      else LoadDistributionType.UNIFORM)
+                      else (LoadDistributionType.SIMPLIFIED if load_dist == "simplified"
+                            else LoadDistributionType.UNIFORM))
     pitch_dist_type = (PitchMomentDistributionType.CHORD_WEIGHTED
                        if pitch_dist == "chord_weighted"
                        else PitchMomentDistributionType.UNIFORM)
@@ -292,6 +291,7 @@ def run_ga_optimization(planform, flight, aero_center, materials, design_space,
         buckling_mode=buckling_mode,
         N_Rib_max_factor=N_Rib_max_factor,
         t_skin_step_mm=t_skin_step_mm,
+        Y_bar_m=Y_bar_m,
     )
 
     problem = WingStructuralProblem(opt_config, design_space)

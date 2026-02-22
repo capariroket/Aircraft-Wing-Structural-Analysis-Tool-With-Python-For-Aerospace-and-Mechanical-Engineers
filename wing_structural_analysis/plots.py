@@ -386,7 +386,8 @@ def plot_twist_rate(y: np.ndarray, twist_rate: np.ndarray,
 
 def _draw_planform_on_ax(ax, y: np.ndarray, chord: np.ndarray,
                          x_FS: np.ndarray, x_RS: np.ndarray,
-                         title: str, show_legend: bool = True):
+                         title: str, show_legend: bool = True,
+                         sections=None):
     """Draw a single planform view on the given axes.
 
     Helper used by plot_planform to draw both Phase-1 and Phase-2 panels.
@@ -399,14 +400,35 @@ def _draw_planform_on_ax(ax, y: np.ndarray, chord: np.ndarray,
         x_RS: Rear spar position [m].
         title: Subplot title.
         show_legend: Whether to show legend.
+        sections: List of SectionGeometry for multi-section LE/TE drawing.
     """
     y_mm = y * 1000
     N_Rib = len(y) - 1
 
-    ax.plot(y_mm, np.zeros_like(y), 'darkgreen', linewidth=2,
-            label='Leading Edge')
-    ax.plot(y_mm, chord * 1000, 'darkorange', linewidth=2,
-            label='Trailing Edge')
+    # --- Build high-resolution LE / TE outline for multi-section wings ---
+    if sections is not None and len(sections) > 1:
+        # Build piecewise LE (y=0) and TE (y=chord) with section break points
+        outline_y = [0.0]
+        outline_chord = [sections[0].c_root]
+        y_start = 0.0
+        for sec in sections:
+            y_end = y_start + sec.b_section
+            outline_y.append(y_end)
+            outline_chord.append(sec.c_tip)
+            y_start = y_end
+        outline_y = np.array(outline_y) * 1000
+        outline_chord = np.array(outline_chord) * 1000
+
+        ax.plot(outline_y, np.zeros_like(outline_y), 'darkgreen', linewidth=2,
+                label='Leading Edge')
+        ax.plot(outline_y, outline_chord, 'darkorange', linewidth=2,
+                label='Trailing Edge')
+    else:
+        ax.plot(y_mm, np.zeros_like(y), 'darkgreen', linewidth=2,
+                label='Leading Edge')
+        ax.plot(y_mm, chord * 1000, 'darkorange', linewidth=2,
+                label='Trailing Edge')
+
     ax.plot(y_mm, x_FS * 1000, 'b--', linewidth=2, label='Front Spar')
     ax.plot(y_mm, x_RS * 1000, 'r--', linewidth=2, label='Rear Spar')
 
@@ -417,6 +439,15 @@ def _draw_planform_on_ax(ax, y: np.ndarray, chord: np.ndarray,
 
     ax.fill_between(y_mm, x_FS * 1000, x_RS * 1000, alpha=0.2, color='gray',
                     label='Wing Box')
+
+    # Add section boundary line if multi-section
+    if sections is not None and len(sections) > 1:
+        y_break = sections[0].b_section * 1000
+        c_break = sections[0].c_tip * 1000
+        ax.axvline(x=y_break, color='gray', linestyle=':', linewidth=1.0,
+                   alpha=0.6)
+        ax.annotate('S1 | S2', xy=(y_break, c_break * 0.5),
+                    fontsize=7, color='gray', ha='center')
 
     ax.set_xlabel('Spanwise Position y [mm]')
     ax.set_ylabel('Chordwise Position x [mm]')
@@ -434,7 +465,8 @@ def plot_planform(y: np.ndarray, chord: np.ndarray,
                   y_phase2: Optional[np.ndarray] = None,
                   chord_at_y_func=None,
                   x_FS_at_y_func=None,
-                  x_RS_at_y_func=None):
+                  x_RS_at_y_func=None,
+                  sections=None):
     """
     Plot wing planform with spar positions and ribs.
 
@@ -451,6 +483,7 @@ def plot_planform(y: np.ndarray, chord: np.ndarray,
         chord_at_y_func: Callable(y)->chord [m] for interpolating Phase-2 geometry.
         x_FS_at_y_func: Callable(y)->x_FS [m] for interpolating Phase-2 geometry.
         x_RS_at_y_func: Callable(y)->x_RS [m] for interpolating Phase-2 geometry.
+        sections: List of SectionGeometry for multi-section LE/TE drawing.
     """
     has_phase2 = (y_phase2 is not None and len(y_phase2) > 2 and
                   chord_at_y_func is not None)
@@ -462,7 +495,8 @@ def plot_planform(y: np.ndarray, chord: np.ndarray,
 
         # Phase-1 (left)
         _draw_planform_on_ax(ax1, y, chord, x_FS, x_RS,
-                             'Phase 1 (Uniform)', show_legend=True)
+                             'Phase 1 (Uniform)', show_legend=True,
+                             sections=sections)
 
         # Phase-2 (right) — compute geometry at adaptive rib positions
         chord_p2 = np.array([chord_at_y_func(yi) for yi in y_phase2])
@@ -474,16 +508,17 @@ def plot_planform(y: np.ndarray, chord: np.ndarray,
                     else np.interp(y_phase2, y, x_RS))
 
         _draw_planform_on_ax(ax2, y_phase2, chord_p2, x_FS_p2, x_RS_p2,
-                             'Phase 2 (Adaptive)', show_legend=True)
+                             'Phase 2 (Adaptive)', show_legend=True,
+                             sections=sections)
 
         fig.suptitle('Wing Planform Comparison', fontsize=14, fontweight='bold')
         plt.tight_layout()
     else:
         # Single plot (no Phase-2 data)
         fig, ax = plt.subplots(figsize=config.figsize)
-        N_Rib = len(y) - 1
         _draw_planform_on_ax(ax, y, chord, x_FS, x_RS,
-                             f'Wing Planform (Top View)')
+                             f'Wing Planform (Top View)',
+                             sections=sections)
 
     save_and_show(fig, 'planform.png', config)
 
@@ -496,7 +531,8 @@ def generate_all_plots(y: np.ndarray, loads_data: dict,
                        torsion_data: dict, spar_data: dict,
                        geometry_data: dict, allowables: dict,
                        config: PlotConfig = PlotConfig(),
-                       phase2_data: Optional[dict] = None):
+                       phase2_data: Optional[dict] = None,
+                       sections=None):
     """
     Generate all required plots.
 
@@ -511,6 +547,7 @@ def generate_all_plots(y: np.ndarray, loads_data: dict,
         phase2_data: Optional dict with Phase-2 rib data for planform comparison.
             Keys: 'y_phase2' (np.ndarray), 'chord_at_y' (callable),
                   'x_FS_at_y' (callable), 'x_RS_at_y' (callable).
+        sections: List of SectionGeometry for multi-section planform drawing.
     """
     print("\nGenerating plots...")
     setup_plot_style(config)
@@ -544,7 +581,8 @@ def generate_all_plots(y: np.ndarray, loads_data: dict,
             'x_RS_at_y_func': phase2_data.get('x_RS_at_y'),
         }
     plot_planform(y, geometry_data['chord'], geometry_data['x_FS'],
-                  geometry_data['x_RS'], config, **p2_kwargs)
+                  geometry_data['x_RS'], config, sections=sections,
+                  **p2_kwargs)
 
     print("All plots generated.")
 

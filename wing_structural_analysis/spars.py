@@ -599,8 +599,12 @@ def analyze_box_beam_stress(M: float, T: float,
     """
     Analyze stresses using wing box beam model.
 
-    Bending: Full wing box I resists the entire moment M.
+    Bending: Each spar carries its share (eta) of M, resisted by its own I.
+        σ_FS = M · (d_FS/2) · η_FS / I_FS
+        σ_RS = M · (d_RS/2) · η_RS / I_RS
     Torsion: Split between spar tubes by load sharing (position-based).
+        τ_FS = T · η_FS · (d_FS/2) / J_FS
+        τ_RS = T · η_RS · (d_RS/2) / J_RS
 
     Args:
         M: Total bending moment at station [N·m]
@@ -608,8 +612,8 @@ def analyze_box_beam_stress(M: float, T: float,
         box: Box beam section properties
         spar_FS: Front spar properties
         spar_RS: Rear spar properties
-        eta_FS: Front spar torsion share [-]
-        eta_RS: Rear spar torsion share [-]
+        eta_FS: Front spar load share [-]
+        eta_RS: Rear spar load share [-]
         y: Spanwise position [m]
 
     Returns:
@@ -617,9 +621,9 @@ def analyze_box_beam_stress(M: float, T: float,
     """
     I = box.I_total
 
-    # Bending stresses (entire M resisted by full box section)
-    sigma_b_FS = abs(M) * spar_FS.c_dist / I
-    sigma_b_RS = abs(M) * spar_RS.c_dist / I
+    # Bending stresses — each spar carries its eta share, using its own I
+    sigma_b_FS = abs(M) * spar_FS.c_dist * eta_FS / spar_FS.I
+    sigma_b_RS = abs(M) * spar_RS.c_dist * eta_RS / spar_RS.I
 
     # Skin bending stress (actual stress in skin material)
     # sigma_ref = M * (h/2) / I, then actual = n * sigma_ref
@@ -627,7 +631,7 @@ def analyze_box_beam_stress(M: float, T: float,
 
     # Torsional shear in spar tubes (split by load sharing)
     tau_FS_val = abs(T * eta_FS) * spar_FS.c_dist / spar_FS.J
-    tau_RS_val = abs(T * eta_RS) * spar_RS.c_dist / spar_RS.J
+    tau_RS_val = abs(T * eta_RS) * spar_RS.c_dist / spar_RS.J 
 
     return BoxBeamStressResult(
         y=y,
@@ -694,11 +698,11 @@ if __name__ == "__main__":
 
     # Material
     db = MaterialDatabase()
-    al = db.get_material('AL7075-T6')
+    al = db.get_material('CFRP_UD')
 
     # Create spars
-    spar_FS = SparProperties.from_mm(d_outer_mm=20, t_wall_mm=2, material=al)
-    spar_RS = SparProperties.from_mm(d_outer_mm=16, t_wall_mm=1.5, material=al)
+    spar_FS = SparProperties.from_mm(d_outer_mm=24, t_wall_mm=1, material=al)
+    spar_RS = SparProperties.from_mm(d_outer_mm=16, t_wall_mm=1, material=al)
 
     print("Front Spar:")
     print(f"  d_outer = {spar_FS.d_outer*1000:.1f} mm")
@@ -721,14 +725,14 @@ if __name__ == "__main__":
     print(f"  η_RS = {sharing.eta_RS:.3f} ({sharing.eta_RS*100:.1f}%)")
 
     # Stress analysis at root
-    M_root = 20.0  # N·m
-    T_root = 0.5   # N·m (torsion)
+    M_root = 270.7032555 # N·m
+    T_root = 48.53062776 # N·m (torsion)
 
     print(f"\n--- Stress Analysis at Root ---")
     print(f"M = {M_root} N·m, T = {T_root} N·m")
 
     result = analyze_dual_spars(M_root, T_root, spar_FS, spar_RS,
-                                X_FS_percent=25.0, X_RS_percent=75.0, x_ac_percent=25.0)
+                                X_FS_percent=15.0, X_RS_percent=60.0, x_ac_percent=25.0)
 
     print(f"\nFront Spar:")
     print(f"  M_share = {result.FS.M_share:.2f} N·m")
@@ -746,14 +750,14 @@ if __name__ == "__main__":
     print(f"Max σ_vm = {result.max_sigma_vm/1e6:.2f} MPa")
 
     # Check against allowable
-    SF = 1.5
+    SF = 3.8
     sigma_allow = al.sigma_u / SF
     margin = (sigma_allow - result.max_sigma_vm) / sigma_allow * 100
     print(f"\nAllowable σ (SF={SF}): {sigma_allow/1e6:.1f} MPa")
     print(f"Safety margin: {margin:.1f}%")
 
     # Mass calculation
-    L_span = 1.0  # m
+    L_span = 2.0465 # m
     m_FS = spar_mass(spar_FS, L_span)
     m_RS = spar_mass(spar_RS, L_span)
     print(f"\n--- Spar Masses (L={L_span}m) ---")

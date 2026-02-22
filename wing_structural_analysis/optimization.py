@@ -185,6 +185,9 @@ class OptimizationConfig:
     load_dist_type: LoadDistributionType = LoadDistributionType.ELLIPTIC
     pitch_dist_type: PitchMomentDistributionType = PitchMomentDistributionType.CHORD_WEIGHTED
 
+    # Simplified mode: mean aerodynamic centre spanwise position [m]
+    Y_bar_m: float = None
+
     # Buckling coefficients
     k_s: float = 10.0           # Skin shear buckling coefficient
     k_c: float = 8.0            # Skin compression buckling coefficient
@@ -309,7 +312,8 @@ class GridSearchOptimizer:
             self.opt_config.aero_center,
             planform.L_span,
             self.opt_config.load_dist_type,
-            self.opt_config.pitch_dist_type
+            self.opt_config.pitch_dist_type,
+            Y_bar_m=self.opt_config.Y_bar_m,
         )
 
         t_skin = self.opt_config.t_skin_mm / 1000
@@ -411,20 +415,17 @@ class GridSearchOptimizer:
         result.A_Cri_FS = (n * W_0 * Y_bar * 0.5 * result.eta_FS) / (2 * sigma_max_spar * c_FS)
         result.A_Cri_RS = (n * W_0 * Y_bar * 0.5 * result.eta_RS) / (2 * sigma_max_spar * c_RS)
 
-        # Early check: 8.2 FS interaction
+        # Early check: 8.2 FS interaction (Von Mises: sqrt(σ² + 3τ²) ≤ σ_allow)
         sigma_allow_spar = self._allowables['sigma_allow_spar']
-        tau_allow_spar = self._allowables['tau_allow_spar']
 
-        FS_interaction = (result.sigma_b_FS_max / sigma_allow_spar) + \
-                         (result.tau_FS_max / tau_allow_spar) ** 2
-        if FS_interaction >= 1.0:
+        sigma_vm_FS = (result.sigma_b_FS_max ** 2 + 3 * result.tau_FS_max ** 2) ** 0.5
+        if sigma_vm_FS >= sigma_allow_spar:
             result.rejection_reason = "FS interaction exceeded"
             return result
 
-        # Early check: 8.3 RS interaction
-        RS_interaction = (result.sigma_b_RS_max / sigma_allow_spar) + \
-                         (result.tau_RS_max / tau_allow_spar) ** 2
-        if RS_interaction >= 1.0:
+        # Early check: 8.3 RS interaction (Von Mises: sqrt(σ² + 3τ²) ≤ σ_allow)
+        sigma_vm_RS = (result.sigma_b_RS_max ** 2 + 3 * result.tau_RS_max ** 2) ** 0.5
+        if sigma_vm_RS >= sigma_allow_spar:
             result.rejection_reason = "RS interaction exceeded"
             return result
 
@@ -520,7 +521,8 @@ class GridSearchOptimizer:
             self.opt_config.aero_center,
             planform.L_span,
             self.opt_config.load_dist_type,
-            self.opt_config.pitch_dist_type
+            self.opt_config.pitch_dist_type,
+            Y_bar_m=self.opt_config.Y_bar_m,
         )
 
         mat_spar = self.opt_config.materials.spar
@@ -1015,8 +1017,9 @@ def run_optimization(planform: PlanformParams,
                      s_min_mm: float = 20.0,
                      buckling_mode: int = 1,
                      N_Rib_max_factor: float = 2.0,
-                     t_skin_step_mm: float = 0.3) -> Tuple[Optional[EvaluationResult],
-                                                            GridSearchOptimizer]:
+                     t_skin_step_mm: float = 0.3,
+                     Y_bar_m: float = None) -> Tuple[Optional[EvaluationResult],
+                                                      GridSearchOptimizer]:
     """
     Convenience function to run two-phase optimization.
 
@@ -1035,7 +1038,8 @@ def run_optimization(planform: PlanformParams,
         Tuple of (best_result, optimizer)
     """
     load_dist_type = (LoadDistributionType.ELLIPTIC if load_dist == "elliptic"
-                      else LoadDistributionType.UNIFORM)
+                      else (LoadDistributionType.SIMPLIFIED if load_dist == "simplified"
+                            else LoadDistributionType.UNIFORM))
     pitch_dist_type = (PitchMomentDistributionType.CHORD_WEIGHTED if pitch_dist == "chord_weighted"
                        else PitchMomentDistributionType.UNIFORM)
 
@@ -1056,6 +1060,7 @@ def run_optimization(planform: PlanformParams,
         buckling_mode=buckling_mode,
         N_Rib_max_factor=N_Rib_max_factor,
         t_skin_step_mm=t_skin_step_mm,
+        Y_bar_m=Y_bar_m,
     )
 
     optimizer = GridSearchOptimizer(opt_config, design_space)

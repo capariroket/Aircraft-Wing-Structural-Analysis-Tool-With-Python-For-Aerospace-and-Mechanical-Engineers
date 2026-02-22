@@ -17,6 +17,7 @@ class LoadDistributionType(Enum):
     """Load distribution type selection."""
     UNIFORM = "uniform"
     ELLIPTIC = "elliptic"
+    SIMPLIFIED = "simplified"
 
 
 class PitchMomentDistributionType(Enum):
@@ -114,6 +115,10 @@ def get_lift_distribution_func(dist_type: LoadDistributionType) -> Callable:
         return lift_distribution_uniform
     elif dist_type == LoadDistributionType.ELLIPTIC:
         return lift_distribution_elliptic
+    elif dist_type == LoadDistributionType.SIMPLIFIED:
+        # Simplified uses elliptic shape for station-by-station values
+        # but root reactions are overridden by the closed-form formulas.
+        return lift_distribution_elliptic
     else:
         raise ValueError(f"Unknown distribution type: {dist_type}")
 
@@ -121,6 +126,46 @@ def get_lift_distribution_func(dist_type: LoadDistributionType) -> Callable:
 # =============================================================================
 # SHEAR FORCE AND BENDING MOMENT (Numerical Integration)
 # =============================================================================
+
+
+def root_bending_moment_from_total_load(n: float, W0: float, y_bar_m: float) -> float:
+    """
+    Root bending moment (single value) using:
+        M_root = n * W0 * y_bar / 2
+
+    Parameters
+    ----------
+    n : float
+        Load factor [-]
+    W0 : float
+        Total weight or total lift being reacted by the wing [N]
+        (use consistent convention with your report)
+    y_bar_m : float
+        Mean spanwise moment arm [m]
+
+    Returns
+    -------
+    float
+        Root bending moment [N*m]
+    """
+    return n * W0 * (y_bar_m / 2.0)
+
+
+def root_bending_moment_ybar_in_mm(n: float, W0: float, y_bar_mm: float) -> float:
+    """
+    Same as above, but y_bar is given in mm (as in your screenshot sometimes).
+    Converts mm -> m internally.
+    """
+    y_bar_m = y_bar_mm / 1000.0
+    return n * W0 * (y_bar_m / 2.0)
+
+
+
+
+
+
+
+
 
 def compute_shear_force(y: np.ndarray, w: np.ndarray) -> np.ndarray:
     """
@@ -336,6 +381,9 @@ class LoadResults:
     e: np.ndarray           # Eccentricity [m]
     x_ac: np.ndarray        # Aero center positions [m]
     x_sc: np.ndarray        # Shear center positions [m]
+    # Simplified-mode override values (None = use numerical integration results)
+    M_root_simplified: float = None  # Closed-form M_root override [N·m]
+    T_root_simplified: float = None  # Closed-form T_root override [N·m]
 
     @property
     def V_root(self) -> float:
@@ -344,12 +392,18 @@ class LoadResults:
 
     @property
     def M_root(self) -> float:
-        """Root bending moment [N·m]."""
+        """Root bending moment [N·m].
+        Returns closed-form value if simplified mode was used."""
+        if self.M_root_simplified is not None:
+            return self.M_root_simplified
         return self.M[0]
 
     @property
     def T_root(self) -> float:
-        """Root torsion [N·m]."""
+        """Root torsion [N·m].
+        Returns closed-form value if simplified mode was used."""
+        if self.T_root_simplified is not None:
+            return self.T_root_simplified
         return self.T[0]
 
 
@@ -361,7 +415,8 @@ def analyze_loads(y: np.ndarray,
                   ac: AeroCenter,
                   L_span: float,
                   load_dist_type: LoadDistributionType = LoadDistributionType.ELLIPTIC,
-                  pitch_dist_type: PitchMomentDistributionType = PitchMomentDistributionType.CHORD_WEIGHTED
+                  pitch_dist_type: PitchMomentDistributionType = PitchMomentDistributionType.CHORD_WEIGHTED,
+                  Y_bar_m: float = None,
                   ) -> LoadResults:
     """
     Perform complete load analysis.
@@ -376,6 +431,8 @@ def analyze_loads(y: np.ndarray,
         L_span: Half-span [m]
         load_dist_type: Lift distribution type
         pitch_dist_type: Pitching moment distribution type
+        Y_bar_m: Mean aerodynamic centre spanwise position [m].
+                 Required when load_dist_type == SIMPLIFIED.
 
     Returns:
         LoadResults with all computed values
@@ -405,10 +462,50 @@ def analyze_loads(y: np.ndarray,
     t = compute_torsion_intensity(w, e, m_pitch)
     T = compute_torsion(y, t)
 
+    # -----------------------------------------------------------------
+    # SIMPLIFIED mode: override M_root and T_root with closed-form
+    # formulas from the design specification:
+    #
+    #   M_root = n · W₀ · Ȳ / 2
+    #
+    #   T_root = 1000 · 0.5 · ρ · V_c² · (S_ref / 2) · (Ȳ / 1000) · C_m
+    #          = 0.5 · ρ · V_c² · (S_ref / 2) · Ȳ · C_m
+    #          (the 1000 and /1000 cancel when Ȳ is in metres)
+    #
+    # The full M and T *arrays* are also scaled so that M[0] == M_root_simplified
+    # and T[0] == T_root_simplified, preserving the shape of the distribution.
+    # This ensures spar/torsion station-by-station analysis is consistent.
+    # -----------------------------------------------------------------
+    M_root_simplified = None
+    T_root_simplified = None
+    if load_dist_type == LoadDistributionType.SIMPLIFIED:
+        if Y_bar_m is None:
+            raise ValueError(
+                "Y_bar_m (mean aerodynamic centre spanwise position) "
+                "must be provided for SIMPLIFIED load distribution."
+            )
+        M_root_simplified = flight.n * flight.W0 * Y_bar_m / 2.0
+        q_inf = 0.5 * flight.rho * flight.V_c ** 2
+        T_root_simplified = q_inf * (flight.S_ref / 2.0) * Y_bar_m * flight.C_m
+
+        # Scale the M array so that M[0] equals M_root_simplified
+        if M[0] != 0.0:
+            M = M * (M_root_simplified / M[0])
+        else:
+            M[0] = M_root_simplified
+
+        # Scale the T array so that T[0] equals T_root_simplified
+        if T[0] != 0.0:
+            T = T * (T_root_simplified / T[0])
+        else:
+            T[0] = T_root_simplified
+
     return LoadResults(
         y=y, w=w, V=V, M=M,
         m_pitch=m_pitch, t=t, T=T,
-        e=e, x_ac=x_ac, x_sc=x_sc
+        e=e, x_ac=x_ac, x_sc=x_sc,
+        M_root_simplified=M_root_simplified,
+        T_root_simplified=T_root_simplified,
     )
 
 
@@ -460,19 +557,19 @@ if __name__ == "__main__":
 
     # Setup planform
     planform = PlanformParams.from_input(
-        b=2.0, AR=8.0, taper_ratio=0.5, t_c=0.12,
-        S_ref=0.5, C_r_mm=300, c_MGC=0.25, Y_bar_mm=400
+        b=4.093, AR=11.03, taper_ratio=0.649, t_c=0.17,
+        S_ref=1.519, C_r_mm=450.12, c_MGC=376.7, Y_bar_mm=950.65
     )
 
     # Flight condition (small UAV, 2g maneuver)
     flight = FlightCondition(
-        W0=50,          # 50 N (~5 kg)
+        W0=290.260,          # 50 N (~5 kg)
         n=2.0,          # 2g
-        V_c=25,         # 25 m/s
-        rho=1.225,      # sea level
-        C_m=-0.05,      # typical
-        S_ref=0.5,
-        c_MGC=0.25
+        V_c=21.48,         # 25 m/s
+        rho=1.112,      # sea level
+        C_m=-0.262,      # typical
+        S_ref=1.519,
+        c_MGC=276.7
     )
 
     print(f"Flight condition:")
@@ -483,10 +580,10 @@ if __name__ == "__main__":
     print(f"  M_pitch_half = {flight.M_pitch_half:.3f} N·m")
 
     # Spar positions
-    spar_pos = SparPosition(X_FS_percent=25, X_RS_percent=65)
+    spar_pos = SparPosition(X_FS_percent=15, X_RS_percent=60)
 
     # Generate stations
-    N_Rib = 10
+    N_Rib = 12
     y = generate_rib_stations(N_Rib, planform.L_span)
     chord = np.array([chord_at_station(yi, planform.C_r, planform.c_tip, planform.L_span) for yi in y])
     x_FS = np.array([spar_pos.x_FS_at_station(c) for c in chord])
